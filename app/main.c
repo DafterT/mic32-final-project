@@ -1,54 +1,74 @@
 #include "mik32_hal_usart.h"
 #include "mik32_hal_i2c.h"
-#include "lcd_driver.h"
+#include "mik32_hal_irq.h"
+#include "string.h"
+#include "stdlib.h"
+#include "queue.h"
+#include "circular_buffer.h"
+
+#define LED_PIN_NUM (7)
+#define LED_PIN_PORT GPIO_2
+
 
 static void SystemClock_Config();
 static void USART_Init();
-static void I2C_Init();
+static void GPIO_Init();
 
 USART_HandleTypeDef husart0;
-I2C_HandleTypeDef hi2c;
+ByteArrayQueue tx_queue;
+ByteCircularBuffer rx_buffer;
 
 int main()
 {
     SystemClock_Config();
     USART_Init();
-    I2C_Init();    
-    
-    uint8_t rx_buffer[1];    
+    GPIO_Init();
 
-    lcd_init ();
-    lcd_send_string("Hope it", 0, 5);
-    lcd_send_string("WORKS", 1, 6);  
+    tx_queue = Queue_Create(16);
+    rx_buffer = ByteCircularBuffer_Create(16);
+
+    for(uint8_t i = 60; i < 70; i++) {
+        ByteCircularBuffer_Push(rx_buffer, i);
+    }
+
+    __HAL_PCC_EPIC_CLK_ENABLE();
+    HAL_EPIC_MaskLevelSet(HAL_EPIC_UART_0_MASK); 
+    HAL_IRQ_EnableInterrupts();
+    HAL_USART_RXNE_EnableInterrupt(&husart0);
+    HAL_USART_TXE_EnableInterrupt(&husart0);
+    HAL_USART_TXC_EnableInterrupt(&husart0);
+    HAL_USART_IDLE_EnableInterrupt(&husart0);
 
     while (1)
     {
-        HAL_USART_Receive(&husart0, rx_buffer, USART_TIMEOUT_DEFAULT);
+       // LED_PIN_PORT->OUTPUT ^= (1 << LED_PIN_NUM);
+        //HAL_USART_WriteByte(&husart0, ByteCircularBuffer_Pop(rx_buffer));
+        HAL_USART_TXE_EnableInterrupt(&husart0);
+        HAL_DelayMs(500);
+    }
+}
 
-        switch(rx_buffer[0]) 
-        {
-            case 'A':
-                lcd_clear();
-                lcd_send_string("Hello", 0, 5);
-                lcd_send_string("Yadro", 1, 3);
-                break;
-
-            case 'B':
-                lcd_clear();
-                lcd_send_int(124, 0, 0);
-                lcd_send_int(421, 1, 5);
-                break;
-
-            case 'C':
-                lcd_clear();
-                lcd_send_double(-53.32, 0, 4);
-                lcd_send_double(-3.145, 1, 0);
-                break;
-
+void trap_handler()
+{
+    LED_PIN_PORT->OUTPUT ^= (1 << LED_PIN_NUM);
+    if(EPIC_CHECK_UART_0()) {
+     /*   if (HAL_USART_RXNE_ReadFlag(&husart0)) {
+            
+            //ByteCircularBuffer_PushFromISR(rx_buffer, HAL_USART_ReadByte(&husart0));
+            LED_PIN_PORT->OUTPUT ^= (1 << LED_PIN_NUM);
+            HAL_USART_RXNE_ClearFlag(&husart0);
         }
 
-        rx_buffer[0] = 0;
+        if (HAL_USART_TXE_ReadFlag(&husart0)) {
+            HAL_USART_TXE_DisableInterrupt(&husart0);
+            LED_PIN_PORT->OUTPUT ^= (1 << LED_PIN_NUM);
+            HAL_USART_WriteByte(&husart0, (char)0x55);
+            HAL_USART_TXE_ClearFlag(&husart0);
+        } */
+        HAL_USART_ClearFlags(&husart0);
     }
+
+    HAL_EPIC_Clear(0xFFFFFFFF);
 }
 
 void SystemClock_Config(void)
@@ -112,24 +132,30 @@ void USART_Init()
     HAL_USART_Init(&husart0);
 }
 
-void I2C_Init() {
-    hi2c.Instance = I2C_1;
-    hi2c.Init.Mode = HAL_I2C_MODE_MASTER;
+void GPIO_Init()
+{
+  /**< Включить  тактирование GPIO_0 */
+  PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_0_M;
 
-    hi2c.Init.DigitalFilter = I2C_DIGITALFILTER_OFF;
-    hi2c.Init.AnalogFilter = I2C_ANALOGFILTER_DISABLE;
-    hi2c.Init.AutoEnd = I2C_AUTOEND_ENABLE;
+  /**< Включить  тактирование GPIO_1 */
+  PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_1_M;
 
-    /* Настройка частоты */
-    hi2c.Clock.PRESC = 5;
-    hi2c.Clock.SCLDEL = 15;
-    hi2c.Clock.SDADEL = 15;
-    hi2c.Clock.SCLH = 15;
-    hi2c.Clock.SCLL = 15;
+  /**< Включить  тактирование GPIO_2 */
+  PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_2_M;
 
-    if (HAL_I2C_Init(&hi2c) == HAL_OK)
-    {
-        HAL_USART_Print(&husart0, "I2C init OK\r\n", USART_TIMEOUT_DEFAULT);
-    }
+  /**< Включить  тактирование схемы формирования прерываний GPIO */
+  PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_IRQ_M;
+
+  // первая функция (порт общего назначения);
+  PAD_CONFIG->PORT_0_CFG |= 0 << (LED_PIN_NUM * 2);
+
+  // нагрузочная способность 2 мА;
+  PAD_CONFIG->PORT_0_DS |= 0 << (LED_PIN_NUM * 2);
+
+  // резисторы подтяжки отключены
+  PAD_CONFIG->PORT_0_PUPD |= 0 << (LED_PIN_NUM * 2);
+
+  // Установка направления выводов как выход.
+  GPIO_2->DIRECTION_OUT = 1 << LED_PIN_NUM;
+
 }
-

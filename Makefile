@@ -3,7 +3,7 @@ MIK32_SHARED_DIR=hardware/mik32v2-shared
 
 BUILD_DIR=build
 
-SERIAL_PORT?=/dev/ttyUSB1
+SERIAL_PORT?=/dev/ttyUSB0
 SERIAL_BOUDRATE?=115200
 
 .PHONY: clean flash monitor

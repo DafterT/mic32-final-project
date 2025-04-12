@@ -3,7 +3,9 @@ set(APP_NAME ${CMAKE_PROJECT_NAME})
 
 add_executable(${APP_NAME}
     main.c
-    lcd_driver.c
+    queue.c
+    crc8_calc.c
+    circular_buffer.c
 )
 
 target_include_directories(${APP_NAME} PUBLIC
