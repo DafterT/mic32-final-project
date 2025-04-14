@@ -6,6 +6,7 @@ BUILD_DIR=build
 SERIAL_PORT?=/dev/ttyUSB0
 SERIAL_BOUDRATE?=115200
 
+
 .PHONY: clean flash monitor
 
 build_app: update_submodules $(BUILD_DIR)
@@ -33,4 +34,8 @@ flash:
 	--adapter-speed 500 --mcu-type MIK32V2
 
 monitor:
-	picocom $(SERIAL_PORT) -b $(SERIAL_BOUDRATE) --omap crcrlf --echo
+	picocom $(SERIAL_PORT) -b $(SERIAL_BOUDRATE) --imap 8bithex --echo
+
+DATA_STREAM?= '\xC0\xFF\xEE\x05\xC0\xFF\xEE\x05\xC0\xFF\xEE\x05\xC0\xFF\xEE\x05'
+stream_data:
+	echo -ne "$(DATA_STREAM)" > $(SERIAL_PORT)
