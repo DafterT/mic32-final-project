@@ -12,6 +12,6 @@ uint8_t ByteCircularBuffer_IsEmpty(ByteCircularBuffer circularBuffer);
 void ByteCircularBuffer_Push(ByteCircularBuffer circularBuffer, uint8_t value);
 void ByteCircularBuffer_PushFromISR(ByteCircularBuffer circularBuffer, uint8_t value);
 uint8_t ByteCircularBuffer_Pop(ByteCircularBuffer circularBuffer);
-uint8_t ByteCircularBuffer_PopFormISR(ByteCircularBuffer circularBuffer);
+uint8_t ByteCircularBuffer_PopFromISR(ByteCircularBuffer circularBuffer);
 
 #endif 

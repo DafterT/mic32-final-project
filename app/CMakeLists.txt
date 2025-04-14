@@ -2,6 +2,7 @@
 set(APP_NAME ${CMAKE_PROJECT_NAME})
 
 add_executable(${APP_NAME}
+    startup.c
     main.c
     queue.c
     crc8_calc.c
@@ -20,6 +21,7 @@ target_link_libraries(${APP_NAME}
 target_link_directories(${APP_NAME}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/hardware/mik32v2-shared/ldscripts
+        .
 )
 
 # Convert output to hex and binary

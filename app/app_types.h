@@ -1,7 +1,7 @@
 #ifndef BYTE_ARRAY_H
 #define BYTE_ARRAY_H
 
-#define MAX_BYTE_BUFFER_LENGTH 16
+#define MAX_BYTE_BUFFER_LENGTH 128
 
 #include "inttypes.h"
 #include "stdbool.h"

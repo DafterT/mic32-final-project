@@ -183,8 +183,10 @@ static void putBackByteArray(ByteArrayQueue q, ByteArray *a)
 	resetBackPointerIfReachedBound(q);
 
 	ByteArray *next = &q->elements[q->back++];
-	
-	memcpy(next, a, a->length + 1);
+
+	for(uint8_t i = 0; i < a->length + 1; ++i) {
+		*(next + i) = *(a + i);
+	}
 }
 
 static ByteArray getFrontByteArray(ByteArrayQueue q)
