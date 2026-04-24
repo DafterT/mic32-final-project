@@ -1,13 +1,10 @@
 #ifndef BYTE_ARRAY_H
 #define BYTE_ARRAY_H
 
-#define MAX_BYTE_BUFFER_LENGTH 128
+#define MAX_BYTE_BUFFER_LENGTH 255
 
 #include "inttypes.h"
 #include "stdbool.h"
-
-#define true  1
-#define false 0
 
 typedef struct {
 	uint8_t length;
