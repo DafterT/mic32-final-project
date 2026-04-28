@@ -4,7 +4,6 @@ set(APP_NAME ${CMAKE_PROJECT_NAME})
 add_executable(${APP_NAME}
     startup.c
     main.c
-    queue.c
     crc8_calc.c
     circular_buffer.c
 )
@@ -30,5 +29,5 @@ add_custom_command(TARGET ${APP_NAME}
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMAND ${TOOLCHAIN_PREFIX}-objcopy ARGS -O binary ${APP_NAME}${CMAKE_EXECUTABLE_SUFFIX_C} ${APP_NAME}.bin
     COMMAND ${TOOLCHAIN_PREFIX}-objcopy ARGS -O ihex ${APP_NAME}${CMAKE_EXECUTABLE_SUFFIX_C} ${APP_NAME}.hex
-    COMMAND ${TOOLCHAIN_PREFIX}-objdump -w -x -s -S ${APP_NAME}.elf > ${APP_NAME}.dump
+    COMMAND ${TOOLCHAIN_PREFIX}-objdump -w -x -s -S ${APP_NAME}${CMAKE_EXECUTABLE_SUFFIX_C} > ${APP_NAME}.dump
 )

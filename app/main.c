@@ -1,43 +1,74 @@
 #include "mik32_hal_usart.h"
-#include "mik32_hal_i2c.h"
 #include "mik32_hal_irq.h"
 #include "mik32_hal_dma.h"
 #include "string.h"
-#include "stdlib.h"
-#include "queue.h"
 #include "circular_buffer.h"
 #include "app_types.h"
 #include "crc8_calc.h"
 
 #define LED_PIN_NUM             (7)
 #define LED_PIN_PORT            (GPIO_2)
-#define TOGGLE_ONBOARD_LED      (LED_PIN_PORT->OUTPUT ^= (1 << LED_PIN_NUM))
-#define BYTES_EXPECTED_TO_RECIEVE   16
 
-static void SystemClock_Config();
-static void USART_Init();
-static void GPIO_Init();
+#define RX_BUFFER_CAPACITY      MAX_BYTE_BUFFER_LENGTH
+
+#define PROTOCOL_HEADER_0       0xC0
+#define PROTOCOL_HEADER_1       0xFF
+#define PROTOCOL_HEADER_2       0xEE
+
+#define MAX_FRAME_TAIL_LENGTH   0xFF
+#define MAX_PAYLOAD_LENGTH      (MAX_FRAME_TAIL_LENGTH - 1)
+
+typedef enum {
+    ParserState_WaitHeader0 = 0,
+    ParserState_WaitHeader1,
+    ParserState_WaitHeader2,
+    ParserState_ReadLength,
+    ParserState_ReadPayload,
+    ParserState_ReadCrc,
+} ParserState;
+
+typedef struct {
+    ParserState state;
+    uint8_t frame_tail_length;
+    uint8_t payload_length;
+    uint8_t payload_received;
+    uint8_t payload_buffer[MAX_PAYLOAD_LENGTH];
+} ProtocolParser;
+
+static void SystemClock_Config(void);
+static void USART_Init(void);
+static void GPIO_Init(void);
 static void DMA_Init(void);
 
-static void configure_interrupts();
-static void configure_mem_to_mem_dma(DMA_InitTypeDef*, DMA_ChannelHandleTypeDef*);
-static void configure_mem_to_uart_dma(DMA_InitTypeDef*, DMA_ChannelHandleTypeDef*);
-static void move_incoming_data_to_src_mem(ByteCircularBuffer, ByteArray*, bool*);
-static void move_data_from_src_to_dst_mem(DMA_ChannelHandleTypeDef*, ByteArray*, ByteArray*, bool*);
-static void transfer_data_from_dst_mem(DMA_ChannelHandleTypeDef*, USART_HandleTypeDef*, ByteArray*);
+static void configure_interrupts(void);
+static void configure_mem_to_uart_dma(DMA_InitTypeDef* hdma, DMA_ChannelHandleTypeDef* ch);
+
+static void drain_rx_buffer(void);
+static void parser_reset(void);
+static void parser_consume_byte(uint8_t byte);
+static void handle_completed_frame(uint8_t received_crc);
+
+static void service_tx_dma(void);
+static void start_uart_tx_dma(ByteArray* tx_buffer);
+static bool enqueue_payload_for_tx(const uint8_t* payload, uint8_t payload_length);
 
 USART_HandleTypeDef husart0;
 DMA_InitTypeDef hdma;
-DMA_ChannelHandleTypeDef hdma_ch_mem_to_mem;
 DMA_ChannelHandleTypeDef hdma_ch_mem_to_uart;
 
-static ByteArrayQueue tx_queue;
 static ByteCircularBuffer rx_buffer;
+static ProtocolParser parser;
 
-static bool data_processed = false;
-static ByteArray src_mem = { .length = BYTES_EXPECTED_TO_RECIEVE };
-static ByteArray dst_mem = { .length = MAX_BYTE_BUFFER_LENGTH };
-static volatile ByteArray ba;
+static ByteArray tx_dma_buffer;
+static ByteArray tx_pending_buffer;
+
+static bool tx_dma_active = false;
+
+static volatile uint32_t rx_overflow_count = 0;
+static volatile uint32_t bad_crc_count = 0;
+static volatile uint32_t bad_length_count = 0;
+static volatile uint32_t valid_packet_count = 0;
+static volatile uint32_t tx_overflow_count = 0;
 
 int main()
 {
@@ -46,40 +77,33 @@ int main()
     DMA_Init();
     USART_Init();
 
-    tx_queue = Queue_Create(16);
-    rx_buffer = ByteCircularBuffer_Create(16);
+    rx_buffer = ByteCircularBuffer_Create(RX_BUFFER_CAPACITY);
+    parser_reset();
 
     configure_interrupts();
-    configure_mem_to_mem_dma(&hdma, &hdma_ch_mem_to_mem);
     configure_mem_to_uart_dma(&hdma, &hdma_ch_mem_to_uart);
 
     while (1)
-    {  
-        move_incoming_data_to_src_mem(rx_buffer, &src_mem, &data_processed);
-
-        if(data_processed) {
-            move_data_from_src_to_dst_mem(&hdma_ch_mem_to_mem, &src_mem, &dst_mem, &data_processed);
-            CRC8_CalculateChecksumAndAppendTo(&dst_mem);
-            transfer_data_from_dst_mem(&hdma_ch_mem_to_uart, &husart0, &dst_mem);
-        }       
+    {
+        service_tx_dma();
+        drain_rx_buffer();
     }
 }
 
 void trap_handler()
 {
-    if(EPIC_CHECK_UART_0()) {
+    if (EPIC_CHECK_UART_0()) {
         if (HAL_USART_RXNE_ReadFlag(&husart0)) {
-            HAL_USART_RXNE_ClearFlag(&husart0);
-            ByteCircularBuffer_PushFromISR(rx_buffer, HAL_USART_ReadByte(&husart0));
+            if (!ByteCircularBuffer_PushFromISR(rx_buffer, HAL_USART_ReadByte(&husart0))) {
+                rx_overflow_count++;
+            }
         }
-     
-        HAL_USART_ClearFlags(&husart0);
     }
 
     HAL_EPIC_Clear(0xFFFFFFFF);
 }
 
-void SystemClock_Config(void)
+static void SystemClock_Config(void)
 {
     PCC_InitTypeDef PCC_OscInit = {0};
 
@@ -97,42 +121,28 @@ void SystemClock_Config(void)
     HAL_PCC_Config(&PCC_OscInit);
 }
 
-void GPIO_Init()
+static void GPIO_Init(void)
 {
-  /**< Включить  тактирование GPIO_0 */
   PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_0_M;
-
-  /**< Включить  тактирование GPIO_1 */
   PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_1_M;
-
-  /**< Включить  тактирование GPIO_2 */
   PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_2_M;
-
-  /**< Включить  тактирование схемы формирования прерываний GPIO */
   PM->CLK_APB_P_SET |= PM_CLOCK_APB_P_GPIO_IRQ_M;
 
-  // первая функция (порт общего назначения);
   PAD_CONFIG->PORT_0_CFG |= 0 << (LED_PIN_NUM * 2);
-
-  // нагрузочная способность 2 мА;
   PAD_CONFIG->PORT_0_DS |= 0 << (LED_PIN_NUM * 2);
-
-  // резисторы подтяжки отключены
   PAD_CONFIG->PORT_0_PUPD |= 0 << (LED_PIN_NUM * 2);
 
-  // Установка направления выводов как выход.
-  GPIO_2->DIRECTION_OUT = 1 << LED_PIN_NUM;
-
+  LED_PIN_PORT->DIRECTION_OUT = 1 << LED_PIN_NUM;
 }
 
-void DMA_Init(void)
+static void DMA_Init(void)
 {
     hdma.Instance = DMA_CONFIG;
     hdma.CurrentValue = DMA_CURRENT_VALUE_ENABLE;
     HAL_DMA_Init(&hdma);
 }
 
-void USART_Init()
+static void USART_Init(void)
 {
     husart0.Instance = UART_0;
     husart0.transmitting = Enable;
@@ -177,39 +187,18 @@ void USART_Init()
     HAL_USART_Init(&husart0);
 }
 
-void configure_interrupts() {
+static void configure_interrupts(void)
+{
     __HAL_PCC_EPIC_CLK_ENABLE();
     HAL_EPIC_MaskLevelSet(HAL_EPIC_UART_0_MASK);
     HAL_USART_RXNE_EnableInterrupt(&husart0);
     HAL_IRQ_EnableInterrupts();
 }
 
-void configure_mem_to_mem_dma(DMA_InitTypeDef* hdma, DMA_ChannelHandleTypeDef* ch) {
+static void configure_mem_to_uart_dma(DMA_InitTypeDef* hdma, DMA_ChannelHandleTypeDef* ch)
+{
     ch->dma = hdma;
 
-    /* Настройки канала */
-    ch->ChannelInit.Channel = DMA_CHANNEL_1;
-    ch->ChannelInit.Priority = DMA_CHANNEL_PRIORITY_VERY_HIGH;
-
-    ch->ChannelInit.ReadMode = DMA_CHANNEL_MODE_MEMORY;
-    ch->ChannelInit.ReadInc = DMA_CHANNEL_INC_ENABLE;
-    ch->ChannelInit.ReadSize = DMA_CHANNEL_SIZE_BYTE; /* data_len должно быть кратно read_size */
-    ch->ChannelInit.ReadBurstSize = 0;                /* read_burst_size должно быть кратно read_size */
-    ch->ChannelInit.ReadRequest = 0;  //DMA_CHANNEL_USART_0_REQUEST;
-    ch->ChannelInit.ReadAck = DMA_CHANNEL_ACK_DISABLE;
-
-    ch->ChannelInit.WriteMode = DMA_CHANNEL_MODE_MEMORY;
-    ch->ChannelInit.WriteInc = DMA_CHANNEL_INC_ENABLE;
-    ch->ChannelInit.WriteSize = DMA_CHANNEL_SIZE_BYTE; /* data_len должно быть кратно write_size */
-    ch->ChannelInit.WriteBurstSize = 0;                /* write_burst_size должно быть кратно read_size */
-    ch->ChannelInit.WriteRequest = 0; //DMA_CHANNEL_USART_0_REQUEST;
-    ch->ChannelInit.WriteAck = DMA_CHANNEL_ACK_ENABLE;
-}
-
-void configure_mem_to_uart_dma(DMA_InitTypeDef* hdma, DMA_ChannelHandleTypeDef* ch) {
-    ch->dma = hdma;
-
-    /* Настройки канала */
     ch->ChannelInit.Channel = DMA_CHANNEL_0;
     ch->ChannelInit.Priority = DMA_CHANNEL_PRIORITY_VERY_HIGH;
 
@@ -228,25 +217,160 @@ void configure_mem_to_uart_dma(DMA_InitTypeDef* hdma, DMA_ChannelHandleTypeDef* 
     ch->ChannelInit.WriteAck = DMA_CHANNEL_ACK_ENABLE;
 }
 
-void move_incoming_data_to_src_mem(ByteCircularBuffer buffer, ByteArray* mem_block, bool* finished) {
-    static uint32_t bytes_processed = 0;
+static void drain_rx_buffer(void)
+{
+    while (!ByteCircularBuffer_IsEmpty(rx_buffer)) {
+        parser_consume_byte(ByteCircularBuffer_Pop(rx_buffer));
+        service_tx_dma();
+    }
+}
+
+static void parser_reset(void)
+{
+    parser.state = ParserState_WaitHeader0;
+    parser.frame_tail_length = 0;
+    parser.payload_length = 0;
+    parser.payload_received = 0;
+}
+
+static void parser_consume_byte(uint8_t byte)
+{
+    switch (parser.state) {
+        case ParserState_WaitHeader0:
+            if (byte == PROTOCOL_HEADER_0) {
+                parser.state = ParserState_WaitHeader1;
+            }
+            break;
+
+        case ParserState_WaitHeader1:
+            if (byte == PROTOCOL_HEADER_1) {
+                parser.state = ParserState_WaitHeader2;
+            } else if (byte == PROTOCOL_HEADER_0) {
+                parser.state = ParserState_WaitHeader1;
+            } else {
+                parser.state = ParserState_WaitHeader0;
+            }
+            break;
+
+        case ParserState_WaitHeader2:
+            if (byte == PROTOCOL_HEADER_2) {
+                parser.state = ParserState_ReadLength;
+            } else if (byte == PROTOCOL_HEADER_0) {
+                parser.state = ParserState_WaitHeader1;
+            } else {
+                parser.state = ParserState_WaitHeader0;
+            }
+            break;
+
+        case ParserState_ReadLength:
+            parser.frame_tail_length = byte;
+
+            if (parser.frame_tail_length == 0) {
+                bad_length_count++;
+                parser_reset();
+                break;
+            }
+
+            /* Protocol length includes the trailing CRC byte. */
+            parser.payload_length = parser.frame_tail_length - 1;
+            parser.payload_received = 0;
+
+            if (parser.payload_length == 0) {
+                parser.state = ParserState_ReadCrc;
+            } else {
+                parser.state = ParserState_ReadPayload;
+            }
+            break;
+
+        case ParserState_ReadPayload:
+            parser.payload_buffer[parser.payload_received++] = byte;
+
+            if (parser.payload_received == parser.payload_length) {
+                parser.state = ParserState_ReadCrc;
+            }
+            break;
+
+        case ParserState_ReadCrc:
+            handle_completed_frame(byte);
+            parser_reset();
+            break;
+    }
+}
+
+static void handle_completed_frame(uint8_t received_crc)
+{
+    uint8_t actual_crc = CRC8_CalculateChecksumOf(parser.payload_buffer, parser.payload_length);
+
+    if (actual_crc != received_crc) {
+        bad_crc_count++;
+        return;
+    }
+
+    valid_packet_count++;
+    (void)enqueue_payload_for_tx(parser.payload_buffer, parser.payload_length);
+}
+
+static void service_tx_dma(void)
+{
+    if (tx_dma_active && HAL_DMA_GetChannelReadyStatus(&hdma_ch_mem_to_uart)) {
+        tx_dma_active = false;
+        tx_dma_buffer.length = 0;
+    }
+
+    if (tx_dma_active || tx_pending_buffer.length == 0) {
+        return;
+    }
+
+    memcpy(tx_dma_buffer.byteArray, tx_pending_buffer.byteArray, tx_pending_buffer.length);
+    tx_dma_buffer.length = tx_pending_buffer.length;
+    tx_pending_buffer.length = 0;
+
+    start_uart_tx_dma(&tx_dma_buffer);
+    tx_dma_active = true;
+}
+
+static void start_uart_tx_dma(ByteArray* tx_buffer)
+{
+    if (tx_buffer->length == 0) {
+        return;
+    }
+
+    HAL_DMA_Start(
+        &hdma_ch_mem_to_uart,
+        tx_buffer->byteArray,
+        (void*)&husart0.Instance->TXDATA,
+        tx_buffer->length - 1
+    );
+}
+
+static bool enqueue_payload_for_tx(const uint8_t* payload, uint8_t payload_length)
+{
+    uint16_t pending_length;
+
+    if (payload_length == 0) {
+        return true;
+    }
+
+    service_tx_dma();
+
+    if (!tx_dma_active && tx_pending_buffer.length == 0) {
+        memcpy(tx_dma_buffer.byteArray, payload, payload_length);
+        tx_dma_buffer.length = payload_length;
+
+        start_uart_tx_dma(&tx_dma_buffer);
+        tx_dma_active = true;
+        return true;
+    }
+
+    pending_length = tx_pending_buffer.length;
     
-    while( (bytes_processed < mem_block->length) && !ByteCircularBuffer_IsEmpty(buffer) ) {
-        mem_block->byteArray[bytes_processed++] = ByteCircularBuffer_Pop(buffer);        
+    if ((pending_length + payload_length) > MAX_BYTE_BUFFER_LENGTH) {
+        tx_overflow_count++;
+        return false;
     }
 
-    if(bytes_processed == mem_block->length) {
-        *finished = true;
-        bytes_processed = 0;
-    }
-}
+    memcpy(&tx_pending_buffer.byteArray[tx_pending_buffer.length], payload, payload_length);
+    tx_pending_buffer.length += payload_length;
 
-void move_data_from_src_to_dst_mem(DMA_ChannelHandleTypeDef* hdma_ch, ByteArray* src, ByteArray* dst, bool* finished) {
-    *finished = false;
-    dst->length = src->length;
-    HAL_DMA_Start(hdma_ch, src->byteArray, dst->byteArray, (src->length - 1));
-}
-
-void transfer_data_from_dst_mem(DMA_ChannelHandleTypeDef* hdma_ch, USART_HandleTypeDef* huart, ByteArray* dst_mem) {
-   HAL_DMA_Start(hdma_ch, dst_mem->byteArray, (void*)&huart->Instance->TXDATA, dst_mem->length - 1);
+    return true;
 }

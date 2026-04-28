@@ -1,41 +1,34 @@
-#include <stdlib.h>
 #include "circular_buffer.h"
 #include "mik32_hal_irq.h"
 
 #define zeroValue 0
-#define CAPACITY 16
+#define CAPACITY 255
 
 struct CircularBuffer
 {
 		uint8_t *values;
 		uint8_t capacity;
-		uint8_t size;
-		uint8_t head;
-		uint8_t tail;
+		volatile uint8_t size;
+		volatile uint8_t head;
+		volatile uint8_t tail;
 };
 
 static struct CircularBuffer circular_buffer;
 static uint8_t values_array[CAPACITY];
 
 static uint8_t pop(ByteCircularBuffer buffer);
-static void push(ByteCircularBuffer buffer, uint8_t value);
-static void increaseSize(ByteCircularBuffer buffer);
-static void decreaseSize(ByteCircularBuffer buffer);
-static void resetHeadIndexIfReachedBound(ByteCircularBuffer buffer);
-static void putValue(ByteCircularBuffer buffer, uint8_t value);
-static uint8_t getValue(ByteCircularBuffer buffer);
-static void resetTailIndexIfReachedBound(ByteCircularBuffer buffer);
+static bool push(ByteCircularBuffer buffer, uint8_t value);
+static bool isFull(ByteCircularBuffer buffer);
+static void advanceIndex(volatile uint8_t* index, uint8_t capacity);
 
 ByteCircularBuffer ByteCircularBuffer_Create(uint8_t capacity)
 {
-	(void)capacity;
-	//ByteCircularBuffer buffer = (ByteCircularBuffer)calloc(1, sizeof(struct CircularBuffer));
 	ByteCircularBuffer buffer = &circular_buffer;
 	
 	if(0 != buffer) {
-		//buffer->values = (uint8_t *)calloc(capacity, sizeof(uint8_t));
 		buffer->values = values_array;
-		buffer->capacity = CAPACITY;
+		buffer->capacity = (capacity == 0 || capacity > CAPACITY) ? CAPACITY : capacity;
+		buffer->size   = 0;
 		buffer->head   = 0;
 		buffer->tail   = 0;
 	}
@@ -46,37 +39,31 @@ ByteCircularBuffer ByteCircularBuffer_Create(uint8_t capacity)
 void ByteCircularBuffer_Destroy(ByteCircularBuffer buffer)
 {
 	if(0 != buffer) {
-		free(buffer->values);
-		free(buffer);
+		buffer->size = 0;
+		buffer->head = 0;
+		buffer->tail = 0;
 	}
 }
 
-uint8_t ByteCircularBuffer_IsEmpty(ByteCircularBuffer buffer)
+bool ByteCircularBuffer_IsEmpty(ByteCircularBuffer buffer)
 {
-	uint8_t result;
-	
-	if(0 == buffer->size)
-	{
-		result = true;
-	}
-	else 
-	{
-		result = false;
-	}
-			
-	return result;
+	return buffer->size == 0;
 }
 
-void ByteCircularBuffer_Push(ByteCircularBuffer buffer, uint8_t value)
+bool ByteCircularBuffer_Push(ByteCircularBuffer buffer, uint8_t value)
 {
+	bool pushed;
+
 	HAL_IRQ_DisableInterrupts();
-    push(buffer, value);
+	pushed = push(buffer, value);
 	HAL_IRQ_EnableInterrupts();
+
+	return pushed;
 }
 
-void ByteCircularBuffer_PushFromISR(ByteCircularBuffer buffer, uint8_t value)
+bool ByteCircularBuffer_PushFromISR(ByteCircularBuffer buffer, uint8_t value)
 {
-	push(buffer, value);
+	return push(buffer, value);
 }
 
 uint8_t ByteCircularBuffer_Pop(ByteCircularBuffer buffer)
@@ -111,58 +98,41 @@ static uint8_t pop(ByteCircularBuffer buffer)
 	if(ByteCircularBuffer_IsEmpty(buffer)) 
 	{
 		result = zeroValue;
-	}	
+	}
 	else
 	{
-		result = getValue(buffer);
-		decreaseSize(buffer);
+		result = buffer->values[buffer->tail];
+		advanceIndex(&buffer->tail, buffer->capacity);
+		buffer->size--;
 	}
 	
 	return result;
 }
 
-static void push(ByteCircularBuffer buffer, uint8_t value)
+static bool push(ByteCircularBuffer buffer, uint8_t value)
 {
-	putValue(buffer, value);
-	increaseSize(buffer);
+	if (isFull(buffer)) {
+		return false;
+	}
+
+	buffer->values[buffer->head] = value;
+	advanceIndex(&buffer->head, buffer->capacity);
+	buffer->size++;
+
+	return true;
 }
 
-static void increaseSize(ByteCircularBuffer buffer)
+static bool isFull(ByteCircularBuffer buffer)
 {
-	if(buffer->size == buffer->capacity)
+	return buffer->size == buffer->capacity;
+}
+
+static void advanceIndex(volatile uint8_t* index, uint8_t capacity)
+{
+	if (((uint8_t)(*index + 1)) >= capacity) {
+		*index = 0;
 		return;
-	
-	++buffer->size;
-}
+	}
 
-static void decreaseSize(ByteCircularBuffer buffer)
-{
-	if(buffer->size == 0)
-		return;
-	
-	--buffer->size;
-}
-
-static void resetHeadIndexIfReachedBound(ByteCircularBuffer buffer)
-{
-	if(buffer->head == buffer->capacity)
-		buffer->head = 0;
-}
-
-static void putValue(ByteCircularBuffer buffer, uint8_t value)
-{
-	resetHeadIndexIfReachedBound(buffer);
-	buffer->values[buffer->head++] = value;
-}
-
-static uint8_t getValue(ByteCircularBuffer buffer)
-{
-	resetTailIndexIfReachedBound(buffer);
-	return buffer->values[buffer->tail++];
-}
-
-static void resetTailIndexIfReachedBound(ByteCircularBuffer buffer)
-{
-	if(buffer->tail == buffer->capacity)
-		buffer->tail = 0;
+	(*index)++;
 }
