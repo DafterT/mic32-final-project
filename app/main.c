@@ -34,11 +34,6 @@ void trap_handler(void)
     HAL_EPIC_Clear(0xFFFFFFFF);
 }
 
-void xputc(char c)
-{
-    (void)HAL_USART_Transmit(&husart0, c, USART_TIMEOUT_DEFAULT);
-}
-
 static void SystemClock_Config(void)
 {
     PCC_InitTypeDef PCC_OscInit = {0};

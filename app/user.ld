@@ -93,6 +93,10 @@ SECTIONS
         *(.srodata .srodata.*)
         *(.sdata .sdata.* .sdata2.*)
         *(.gnu.linkonce.s.*)
+        PROVIDE(_tls_data = .);
+        PROVIDE(_tdata_begin = .);
+        *(.tdata .tdata.*)
+        PROVIDE(_tdata_end = .);
         PROVIDE(__data_end = .);
     } >ram AT>rom 
 
@@ -103,13 +107,28 @@ SECTIONS
 
     .bss (NOLOAD): ALIGN(4) {
         __bss_start = .;
+        *(.tbss .tbss.*)
+        PROVIDE(_tbss_end = .);
         *(.sbss*) /* Must be located immediately after the .sdata section */
         *(.gnu.linkonce.sb.*)
+        *(.scommon)
         *(.bss .bss.*)
         *(.gnu.linkonce.b.*)
         *(COMMON)
         __bss_end = .;
     } >ram 
+
+    .ram_text : ALIGN(4) {
+        PROVIDE(__ram_text_start = .);
+        *(.ram_text)
+        . = ALIGN(4);
+        PROVIDE(__ram_text_end = .);
+    } >ram AT>rom
+
+    PROVIDE( __ram_text_source_start = LOADADDR(.ram_text) );
+    PROVIDE( __ram_text_target_start = ADDR(.ram_text) );
+    PROVIDE( __ram_text_target_end = ADDR(.ram_text) + SIZEOF(.ram_text) );
+    PROVIDE( __rom_image_end = LOADADDR(.ram_text) + SIZEOF(.ram_text) );
 
     __stack_size = DEFINED(__stack_size) ? __stack_size : 1024;
     PROVIDE(__stack_size = __stack_size);
@@ -119,4 +138,11 @@ SECTIONS
       . = __stack_size;
       PROVIDE( __sp = . );
     } >ram 
+
+    ASSERT(__rom_image_end <= ORIGIN(rom) + LENGTH(rom), "rom section overflows")
+    ASSERT(__ram_text_end <= ORIGIN(ram) + LENGTH(ram) - __stack_size, "ram section overflows")
+
+    /DISCARD/ : {
+        *(.eh_frame .eh_frame.*)
+    }
 }
