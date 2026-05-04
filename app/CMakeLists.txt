@@ -4,8 +4,6 @@ set(APP_NAME ${CMAKE_PROJECT_NAME})
 add_executable(${APP_NAME}
     startup.c
     main.c
-    crc8_calc.c
-    circular_buffer.c
 )
 
 target_include_directories(${APP_NAME} PUBLIC

@@ -6,8 +6,7 @@ BUILD_DIR=build
 SERIAL_PORT?=/dev/ttyUSB0
 SERIAL_BOUDRATE?=115200
 
-
-.PHONY: clean flash monitor
+.PHONY: clean flash monitor size_analyze_html size_analyze_rom size_analyze_ram size_analyze_sections
 
 build_app: update_submodules $(BUILD_DIR)
 	cmake --build $(BUILD_DIR)
@@ -34,8 +33,17 @@ flash:
 	--adapter-speed 500 --mcu-type MIK32V2
 
 monitor:
-	picocom $(SERIAL_PORT) -b $(SERIAL_BOUDRATE) --imap 8bithex --echo
+	picocom $(SERIAL_PORT) -b $(SERIAL_BOUDRATE) --omap crcrlf --echo
 
-DATA_STREAM?= '\xC0\xFF\xEE\x05\xC0\xFF\xEE\x05\xC0\xFF\xEE\x05\xC0\xFF\xEE\x05'
-stream_data:
-	echo -ne "$(DATA_STREAM)" > $(SERIAL_PORT)
+size_analyze_html: build_app
+	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -Ha --rom -W $(BUILD_DIR)/app/base_project.elf > size-analyze-rom.html
+	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -Ha --ram -W $(BUILD_DIR)/app/base_project.elf > size-analyze-ram.html
+
+size_analyze_rom: build_app
+	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -w 120 -Ha --rom $(BUILD_DIR)/app/base_project.elf
+
+size_analyze_ram: build_app
+	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -w 120 -Ha --ram $(BUILD_DIR)/app/base_project.elf
+
+size_analyze_sections: build_app
+	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -w 120 -Ha -P $(BUILD_DIR)/app/base_project.elf
