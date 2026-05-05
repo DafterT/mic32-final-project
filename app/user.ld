@@ -6,6 +6,7 @@ ENTRY(_enter)
 
 MEMORY
 {
+    spifi (RX) : ORIGIN = 0x80000000, LENGTH = 2*1024M /* External SPI flash */
     ram (RWX) : ORIGIN = 0x02000000, LENGTH = 16K /* Internal 16 Kb SRAM*/
     rom (RX) :ORIGIN = 0x01000000, LENGTH = 8K /* Internal eeprom 8 Kb */
 }
@@ -30,37 +31,37 @@ SECTIONS
         *(.text.*)
         *(.gnu.linkonce.t.*)
         PROVIDE(__TEXT_END__ = .);
-    } >rom
+    } >spifi
 
     .fini (READONLY): {
         KEEP (*(SORT_NONE(.fini)))
-    } >rom
+    } >spifi
 
     .preinit_array (READONLY): ALIGN(4) {
         PROVIDE_HIDDEN (__preinit_array_start = .);
         KEEP (*(.preinit_array))
         PROVIDE_HIDDEN (__preinit_array_end = .);
-    } >rom
+    } >spifi
 
     .init_array (READONLY): ALIGN(4) {
         PROVIDE_HIDDEN (__init_array_start = .);
         KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
         KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
         PROVIDE_HIDDEN (__init_array_end = .);
-    } >rom
+    } >spifi
 
     .fini_array (READONLY): ALIGN(4) {
         PROVIDE_HIDDEN (__fini_array_start = .);
         KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
         KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
         PROVIDE_HIDDEN (__fini_array_end = .);
-    } >rom
+    } >spifi
 
     .rodata (READONLY) : {
         *(.rdata)
         *(.rodata .rodata.*)
         *(.gnu.linkonce.r.*)
-    } >rom
+    } >spifi
 
     /* TEXT SECTION
      *
@@ -98,7 +99,7 @@ SECTIONS
         *(.tdata .tdata.*)
         PROVIDE(_tdata_end = .);
         PROVIDE(__data_end = .);
-    } >ram AT>rom 
+    } >ram AT>spifi 
 
     PROVIDE( __data_source_start = LOADADDR(.data) );
     PROVIDE( __data_target_start = ADDR(.data) );
@@ -123,12 +124,12 @@ SECTIONS
         *(.ram_text)
         . = ALIGN(4);
         PROVIDE(__ram_text_end = .);
-    } >ram AT>rom
+    } >ram AT>spifi
 
     PROVIDE( __ram_text_source_start = LOADADDR(.ram_text) );
     PROVIDE( __ram_text_target_start = ADDR(.ram_text) );
     PROVIDE( __ram_text_target_end = ADDR(.ram_text) + SIZEOF(.ram_text) );
-    PROVIDE( __rom_image_end = LOADADDR(.ram_text) + SIZEOF(.ram_text) );
+    PROVIDE( __rom_image_end = MAX(LOADADDR(.data) + SIZEOF(.data), LOADADDR(.ram_text) + SIZEOF(.ram_text)) );
 
     __stack_size = DEFINED(__stack_size) ? __stack_size : 1024;
     PROVIDE(__stack_size = __stack_size);
@@ -139,7 +140,7 @@ SECTIONS
       PROVIDE( __sp = . );
     } >ram 
 
-    ASSERT(__rom_image_end <= ORIGIN(rom) + LENGTH(rom), "rom section overflows")
+    ASSERT(__rom_image_end <= ORIGIN(spifi) + LENGTH(spifi), "spifi section overflows")
     ASSERT(__ram_text_end <= ORIGIN(ram) + LENGTH(ram) - __stack_size, "ram section overflows")
 
     /DISCARD/ : {
