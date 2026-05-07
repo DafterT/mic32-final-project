@@ -4,12 +4,15 @@ set(APP_NAME ${CMAKE_PROJECT_NAME})
 add_executable(${APP_NAME}
     startup.c
     main.c
+    game/game.c
+    game/game_storage.c
     neural_network/model_weights.c
     neural_network/quant_model.c
 )
 
 target_include_directories(${APP_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/game
     ${CMAKE_CURRENT_SOURCE_DIR}/neural_network
 )
 
