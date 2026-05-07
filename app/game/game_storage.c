@@ -10,6 +10,8 @@
 
 #define GAME_EEPROM_TIMEOUT 100000u
 #define STORAGE_SLOT_NONE   (-1)
+#define GAME_EEPROM_ERASED_BYTE ((uint8_t)GAME_EEPROM_ERASED_WORD)
+#define GAME_STORAGE_CRC_LENGTH ((uint32_t)offsetof(GameStorageRecord, crc32))
 
 typedef enum {
     STORAGE_SLOT_EMPTY = 0u,
@@ -20,9 +22,9 @@ typedef enum {
 
 typedef struct {
     int8_t user_slot;
-    int8_t target_reusable_slot;
+    int8_t matching_corrupt_slot;
     int8_t empty_slot;
-    int8_t reusable_slot;
+    int8_t corrupt_or_unknown_slot;
     int8_t eviction_slot;
     uint32_t eviction_sessions;
     uint32_t eviction_rounds;
@@ -33,7 +35,6 @@ static bool storage_record_is_empty(const GameStorageRecord *record);
 static bool storage_record_is_valid(const GameStorageRecord *record);
 static uint32_t storage_crc32(const void *data, uint32_t length);
 static uint32_t storage_uid_hash(const GameUserId *id);
-static bool storage_uid_equal(const GameUserId *lhs, const GameUserId *rhs);
 
 static uint16_t storage_slot_address(uint8_t slot_index);
 static bool storage_user_id_is_valid(const GameUserId *id);
@@ -110,7 +111,7 @@ GameStatus game_storage_load_user(const GameUserId *id, GameUser *user)
             continue;
         }
 
-        if (record.crc32 != storage_crc32(&record, (uint32_t)offsetof(GameStorageRecord, crc32))) {
+        if (record.crc32 != storage_crc32(&record, GAME_STORAGE_CRC_LENGTH)) {
             status = eeprom_erase_slot(slot_index);
             if (status != GAME_STATUS_OK) {
                 return status;
@@ -130,7 +131,7 @@ GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_sto
     StorageScan scan;
     int8_t target_slot;
     GameStatus status;
-    GameStatus result = GAME_STATUS_OK;
+    GameStatus save_status = GAME_STATUS_OK;
     GameStorageRecord record;
 
     if ((user == NULL) || !storage_user_id_is_valid(&user->id)) {
@@ -149,17 +150,17 @@ GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_sto
 
     if (scan.user_slot >= 0) {
         target_slot = scan.user_slot;
-    } else if (scan.target_reusable_slot >= 0) {
-        target_slot = scan.target_reusable_slot;
-        result = GAME_STATUS_CRC_ERROR;
+    } else if (scan.matching_corrupt_slot >= 0) {
+        target_slot = scan.matching_corrupt_slot;
+        save_status = GAME_STATUS_CRC_ERROR;
     } else if (scan.empty_slot >= 0) {
         target_slot = scan.empty_slot;
-    } else if (scan.reusable_slot >= 0) {
-        target_slot = scan.reusable_slot;
-        result = GAME_STATUS_CRC_ERROR;
+    } else if (scan.corrupt_or_unknown_slot >= 0) {
+        target_slot = scan.corrupt_or_unknown_slot;
+        save_status = GAME_STATUS_CRC_ERROR;
     } else if (scan.eviction_slot >= 0) {
         target_slot = scan.eviction_slot;
-        result = GAME_STATUS_STORAGE_FULL;
+        save_status = GAME_STATUS_STORAGE_FULL;
     } else {
         return GAME_STATUS_STORAGE_FULL;
     }
@@ -180,7 +181,7 @@ GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_sto
         return status;
     }
 
-    return result;
+    return save_status;
 }
 
 static GameStatus eeprom_erase_slot(uint8_t slot_index)
@@ -203,16 +204,14 @@ static GameStatus eeprom_erase_slot(uint8_t slot_index)
 static bool storage_record_is_empty(const GameStorageRecord *record)
 {
     const uint8_t *bytes = (const uint8_t *)record;
-    uint32_t word;
-    uint8_t index;
+    size_t index;
 
     if (record == NULL) {
         return false;
     }
 
-    for (index = 0u; index < GAME_EEPROM_WORDS_PER_PAGE; ++index) {
-        memcpy(&word, &bytes[index * sizeof(word)], sizeof(word));
-        if (word != GAME_EEPROM_ERASED_WORD) {
+    for (index = 0u; index < sizeof(*record); ++index) {
+        if (bytes[index] != GAME_EEPROM_ERASED_BYTE) {
             return false;
         }
     }
@@ -224,7 +223,7 @@ static bool storage_record_is_valid(const GameStorageRecord *record)
 {
     return storage_record_header_is_known(record) &&
            storage_record_uid_is_valid(record) &&
-           (record->crc32 == storage_crc32(record, (uint32_t)offsetof(GameStorageRecord, crc32)));
+           (record->crc32 == storage_crc32(record, GAME_STORAGE_CRC_LENGTH));
 }
 
 static uint32_t storage_crc32(const void *data, uint32_t length)
@@ -260,15 +259,6 @@ static uint32_t storage_uid_hash(const GameUserId *id)
     }
 
     return hash;
-}
-
-static bool storage_uid_equal(const GameUserId *lhs, const GameUserId *rhs)
-{
-    if (!storage_user_id_is_valid(lhs) || !storage_user_id_is_valid(rhs) || (lhs->length != rhs->length)) {
-        return false;
-    }
-
-    return memcmp(lhs->bytes, rhs->bytes, lhs->length) == 0;
 }
 
 static uint16_t storage_slot_address(uint8_t slot_index)
@@ -309,9 +299,11 @@ static StorageSlotState storage_record_state(const GameStorageRecord *record)
 
 static bool storage_record_matches_uid(const GameStorageRecord *record, const GameUserId *id)
 {
-    GameUserId record_id;
-
     if (!storage_record_uid_is_valid(record) || !storage_user_id_is_valid(id)) {
+        return false;
+    }
+
+    if (record->uid_len != id->length) {
         return false;
     }
 
@@ -319,8 +311,7 @@ static bool storage_record_matches_uid(const GameStorageRecord *record, const Ga
         return false;
     }
 
-    storage_record_get_id(record, &record_id);
-    return storage_uid_equal(&record_id, id);
+    return memcmp(record->uid, id->bytes, id->length) == 0;
 }
 
 static bool storage_record_is_better_eviction(const StorageScan *scan, const GameStorageRecord *record)
@@ -406,9 +397,9 @@ static GameStatus storage_scan_slots(const GameUserId *id, StorageScan *scan)
 static void storage_scan_init(StorageScan *scan)
 {
     scan->user_slot = STORAGE_SLOT_NONE;
-    scan->target_reusable_slot = STORAGE_SLOT_NONE;
+    scan->matching_corrupt_slot = STORAGE_SLOT_NONE;
     scan->empty_slot = STORAGE_SLOT_NONE;
-    scan->reusable_slot = STORAGE_SLOT_NONE;
+    scan->corrupt_or_unknown_slot = STORAGE_SLOT_NONE;
     scan->eviction_slot = STORAGE_SLOT_NONE;
     scan->eviction_sessions = UINT32_MAX;
     scan->eviction_rounds = UINT32_MAX;
@@ -429,9 +420,9 @@ static void storage_scan_update(StorageScan *scan,
 
     if ((state == STORAGE_SLOT_CORRUPT) || (state == STORAGE_SLOT_UNKNOWN)) {
         if ((state == STORAGE_SLOT_CORRUPT) && storage_record_matches_uid(record, id)) {
-            scan->target_reusable_slot = (int8_t)slot_index;
-        } else if (scan->reusable_slot < 0) {
-            scan->reusable_slot = (int8_t)slot_index;
+            scan->matching_corrupt_slot = (int8_t)slot_index;
+        } else if (scan->corrupt_or_unknown_slot < 0) {
+            scan->corrupt_or_unknown_slot = (int8_t)slot_index;
         }
         return;
     }
@@ -496,7 +487,7 @@ static void storage_user_to_record(const GameUser *user, uint32_t sessions_to_st
     memcpy(record->model_moves, user->model_history.moves, sizeof(record->model_moves));
     memcpy(record->model_results, user->model_history.results, sizeof(record->model_results));
 
-    record->crc32 = storage_crc32(record, (uint32_t)offsetof(GameStorageRecord, crc32));
+    record->crc32 = storage_crc32(record, GAME_STORAGE_CRC_LENGTH);
 }
 
 static GameStatus storage_verify_written_record(uint8_t slot_index, const GameStorageRecord *expected)

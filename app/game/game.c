@@ -11,14 +11,11 @@ _Static_assert(MODEL_WINDOW <= QUANT_MODEL_MAX_WINDOW,
                "MODEL.window must fit QuantModelHistory");
 
 static bool user_id_is_valid(const GameUserId *id);
-static void user_id_copy(GameUserId *dst, const GameUserId *src);
-static void init_history(QuantModelHistory *history);
 static void init_new_user(const GameUserId *id, GameUser *user);
-static void init_loaded_user(GameUser *user, const GameUser *loaded);
 static GameMove counter_move(uint8_t predicted_move);
 static GameRoundResult round_result(GameMove player_move, GameMove device_move);
 static void update_stats(GameStats *stats, GameRoundResult result);
-static bool save_completed(GameStatus status);
+static bool save_status_was_persisted(GameStatus status);
 
 GameStatus game_init_user(const GameUserId *id, GameUser *user)
 {
@@ -30,10 +27,11 @@ GameStatus game_init_user(const GameUserId *id, GameUser *user)
     }
 
     status = game_storage_load_user(id, &loaded);
-    if (status == GAME_STATUS_OK)
-        init_loaded_user(user, &loaded);
-    else
+    if (status == GAME_STATUS_OK) {
+        *user = loaded;
+    } else {
         init_new_user(id, user);
+    }
     return status;
 }
 
@@ -75,7 +73,7 @@ GameStatus game_save_user(GameUser *user)
     next_session = user->sessions_played + 1u;
     status = game_storage_save_user(user, next_session);
 
-    if (save_completed(status)) {
+    if (save_status_was_persisted(status)) {
         user->sessions_played = next_session;
         user->dirty = false;
         user->loaded_from_storage = true;
@@ -89,31 +87,12 @@ static bool user_id_is_valid(const GameUserId *id)
     return (id != NULL) && (id->length > 0u) && (id->length <= GAME_USER_ID_MAX_BYTES);
 }
 
-static void user_id_copy(GameUserId *dst, const GameUserId *src)
-{
-    memset(dst->bytes, 0, sizeof(dst->bytes));
-    dst->length = src->length;
-    memcpy(dst->bytes, src->bytes, src->length);
-}
-
-static void init_history(QuantModelHistory *history)
-{
-    memset(history, 0, sizeof(*history));
-    quant_model_history_init(&MODEL, history, (uint8_t)GAME_MOVE_ROCK, (uint8_t)GAME_ROUND_DRAW);
-}
-
 static void init_new_user(const GameUserId *id, GameUser *user)
 {
     memset(user, 0, sizeof(*user));
-    user_id_copy(&user->id, id);
-    init_history(&user->model_history);
-}
-
-static void init_loaded_user(GameUser *user, const GameUser *loaded)
-{
-    *user = *loaded;
-    user->dirty = false;
-    user->loaded_from_storage = true;
+    user->id.length = id->length;
+    memcpy(user->id.bytes, id->bytes, id->length);
+    quant_model_history_init(&MODEL, &user->model_history, (uint8_t)GAME_MOVE_ROCK, (uint8_t)GAME_ROUND_DRAW);
 }
 
 static GameMove counter_move(uint8_t predicted_move)
@@ -127,7 +106,7 @@ static GameRoundResult round_result(GameMove player_move, GameMove device_move)
         return GAME_ROUND_DRAW;
     }
 
-    if ((((uint8_t)player_move + 1u) % GAME_MOVE_COUNT) == (uint8_t)device_move) {
+    if (counter_move((uint8_t)player_move) == device_move) {
         return GAME_ROUND_PLAYER_LOSS;
     }
 
@@ -153,7 +132,7 @@ static void update_stats(GameStats *stats, GameRoundResult result)
     }
 }
 
-static bool save_completed(GameStatus status)
+static bool save_status_was_persisted(GameStatus status)
 {
     return (status == GAME_STATUS_OK) ||
            (status == GAME_STATUS_STORAGE_FULL) ||
