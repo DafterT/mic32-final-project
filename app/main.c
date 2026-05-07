@@ -15,6 +15,7 @@ static void uart0_init(USART_HandleTypeDef *uart);
 static void print_help(void);
 static void print_init_status(GameStatus status, const GameUser *user);
 static void print_save_status(GameStatus status, const GameUser *user);
+static void print_user_id(const GameUserId *id);
 static char read_command(USART_HandleTypeDef *uart);
 static bool parse_move(char command, GameMove *move);
 static const char *move_name(GameMove move);
@@ -25,7 +26,7 @@ static GameStatus save_user(GameUser *user);
 
 int main(void)
 {
-    static const GameUserId uart_user_id = {
+    static GameUserId uart_user_id = {
         .bytes = { 'U', 'A', 'R', 'T' },
         .length = 4u
     };
@@ -76,8 +77,26 @@ int main(void)
             continue;
         }
 
+        if ((command == 'u') || (command == 'U')) {
+            char id_suffix;
+
+            status = save_user(&user);
+            if (status_is_fatal(status)) {
+                continue;
+            }
+
+            xprintf("uid char> ");
+            id_suffix = read_command(&uart0);
+            xprintf("%c\r\n", id_suffix);
+
+            uart_user_id.bytes[uart_user_id.length - 1u] = (uint8_t)id_suffix;
+            status = game_init_user(&uart_user_id, &user);
+            print_init_status(status, &user);
+            continue;
+        }
+
         if (!parse_move(command, &player_move)) {
-            xprintf("bad input. use r/p/s, 0/1/2, h, w, n\r\n");
+            xprintf("bad input. use r/p/s, 0/1/2, h, w, n, u\r\n");
             continue;
         }
 
@@ -139,13 +158,15 @@ static void print_help(void)
     xprintf("UID = UART demo user\r\n");
     xprintf("r/0 = rock, p/1 = paper, s/2 = scissors\r\n");
     xprintf("w = save snapshot, n = save and reload user\r\n");
+    xprintf("uX = save and switch UID to UARX\r\n");
     xprintf("h/? = help\r\n");
 }
 
 static void print_init_status(GameStatus status, const GameUser *user)
 {
-    xprintf("\r\ninit status=%s loaded=%u sessions=%lu rounds=%lu\r\n",
-            status_name(status),
+    xprintf("\r\ninit status=%s uid=", status_name(status));
+    print_user_id(&user->id);
+    xprintf(" loaded=%u sessions=%lu rounds=%lu\r\n",
             user->loaded_from_storage ? 1u : 0u,
             (unsigned long)user->sessions_played,
             (unsigned long)user->stats.rounds);
@@ -153,10 +174,26 @@ static void print_init_status(GameStatus status, const GameUser *user)
 
 static void print_save_status(GameStatus status, const GameUser *user)
 {
-    xprintf("save status=%s sessions=%lu dirty=%u\r\n",
-            status_name(status),
+    if ((status == GAME_STATUS_CRC_ERROR) && !user->dirty) {
+        xprintf("save status=ok warning=crc_reused uid=");
+    } else if ((status == GAME_STATUS_STORAGE_FULL) && !user->dirty) {
+        xprintf("save status=ok warning=evicted_old_user uid=");
+    } else {
+        xprintf("save status=%s uid=", status_name(status));
+    }
+    print_user_id(&user->id);
+    xprintf(" sessions=%lu dirty=%u\r\n",
             (unsigned long)user->sessions_played,
             user->dirty ? 1u : 0u);
+}
+
+static void print_user_id(const GameUserId *id)
+{
+    uint8_t index;
+
+    for (index = 0u; index < id->length; ++index) {
+        xprintf("%c", id->bytes[index]);
+    }
 }
 
 static char read_command(USART_HandleTypeDef *uart)
