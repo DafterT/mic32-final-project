@@ -8,12 +8,14 @@ add_executable(${APP_NAME}
     game/game_storage.c
     neural_network/model_weights.c
     neural_network/quant_model.c
+    rfid/mfrc522.c
 )
 
 target_include_directories(${APP_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/game
     ${CMAKE_CURRENT_SOURCE_DIR}/neural_network
+    ${CMAKE_CURRENT_SOURCE_DIR}/rfid
 )
 
 target_link_libraries(${APP_NAME}

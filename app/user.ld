@@ -121,7 +121,7 @@ SECTIONS
 
     .ram_text : ALIGN(4) {
         PROVIDE(__ram_text_start = .);
-        *(.ram_text)
+        *(.ram_text .ram_text.*)
         . = ALIGN(4);
         PROVIDE(__ram_text_end = .);
     } >ram AT>spifi

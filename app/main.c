@@ -1,7 +1,11 @@
 #include "game.h"
 #include "mik32_hal.h"
 #include "mik32_hal_irq.h"
+#include "mik32_hal_scr1_timer.h"
+#include "mik32_hal_spi.h"
 #include "mik32_hal_usart.h"
+#include "mfrc522.h"
+#include "rfid_config.h"
 #include "xprintf.h"
 
 #include <stdbool.h>
@@ -10,8 +14,17 @@
 #define UART_BAUDRATE 115200u
 #define MOVE_COUNT    3u
 
-static void system_clock_config(void);
-static void uart0_init(USART_HandleTypeDef *uart);
+USART_HandleTypeDef husart0;
+SPI_HandleTypeDef hspi0;
+MFRC522 mfrc522;
+
+static void SystemClock_Config(void);
+static void USART0_Init(void);
+static void SPI0_Init(void);
+static void RFID_MonitorLoop(void);
+static void print_rfid_uid(const Uid *uid);
+#if 0
+/* Старые UART game helpers оставлены для последующего объединения с RFID UID. */
 static void print_help(void);
 static void print_init_status(GameStatus status, const GameUser *user);
 static void print_save_status(GameStatus status, const GameUser *user);
@@ -23,9 +36,46 @@ static const char *result_name(GameRoundResult result);
 static const char *status_name(GameStatus status);
 static bool status_is_fatal(GameStatus status);
 static GameStatus save_user(GameUser *user);
+#endif
+
+uint32_t HAL_Micros(void)
+{
+    return HAL_Time_SCR1TIM_Micros();
+}
+
+uint32_t HAL_Millis(void)
+{
+    return HAL_Time_SCR1TIM_Millis();
+}
+
+void HAL_DelayUs(uint32_t time_us)
+{
+    HAL_Time_SCR1TIM_DelayUs(time_us);
+}
+
+void HAL_DelayMs(uint32_t time_ms)
+{
+    HAL_Time_SCR1TIM_DelayMs(time_ms);
+}
 
 int main(void)
 {
+    SystemClock_Config();
+    HAL_Init();
+    HAL_Time_SCR1TIM_Init();
+    USART0_Init();
+    SPI0_Init();
+
+    MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
+    PCD_Init(&mfrc522);
+
+    xprintf("\r\nRFID monitor over UART\r\n");
+    xprintf("Поднесите RFID метку к считывателю...\r\n");
+
+    RFID_MonitorLoop();
+
+#if 0
+    /* Старый UART game loop оставлен для последующего объединения с RFID UID. */
     static GameUserId uart_user_id = {
         .bytes = { 'U', 'A', 'R', 'T' },
         .length = 4u
@@ -114,6 +164,9 @@ int main(void)
                 (unsigned long)user.sessions_played,
                 user.dirty ? 1u : 0u);
     }
+#endif
+
+    return 0;
 }
 
 void trap_handler(void)
@@ -121,7 +174,7 @@ void trap_handler(void)
     HAL_EPIC_Clear(0xFFFFFFFF);
 }
 
-static void system_clock_config(void)
+static void SystemClock_Config(void)
 {
     PCC_InitTypeDef pcc = {0};
 
@@ -140,18 +193,72 @@ static void system_clock_config(void)
     HAL_PCC_Config(&pcc);
 }
 
-static void uart0_init(USART_HandleTypeDef *uart)
+static void USART0_Init(void)
 {
-    *uart = (USART_HandleTypeDef){0};
-    uart->Instance = UART_0;
-    uart->transmitting = Enable;
-    uart->receiving = Enable;
-    uart->xck_mode = XCK_Mode3;
-    uart->baudrate = UART_BAUDRATE;
+    husart0 = (USART_HandleTypeDef){0};
+    husart0.Instance = UART_0;
+    husart0.transmitting = Enable;
+    husart0.receiving = Enable;
+    husart0.xck_mode = XCK_Mode3;
+    husart0.baudrate = UART_BAUDRATE;
 
-    HAL_USART_Init(uart);
+    HAL_USART_Init(&husart0);
 }
 
+static void SPI0_Init(void)
+{
+    hspi0 = (SPI_HandleTypeDef){0};
+    hspi0.Instance = RFID_SPI_INSTANCE;
+    hspi0.Init.SPI_Mode = HAL_SPI_MODE_MASTER;
+    hspi0.Init.CLKPhase = RFID_SPI_PHASE;
+    hspi0.Init.CLKPolarity = RFID_SPI_POLARITY;
+    hspi0.Init.ThresholdTX = 1;
+    hspi0.Init.BaudRateDiv = RFID_SPI_BAUDRATE_DIV;
+    hspi0.Init.Decoder = SPI_DECODER_NONE;
+    hspi0.Init.ManualCS = SPI_MANUALCS_ON;
+    hspi0.Init.ChipSelect = SPI_CS_NONE;
+
+    if (HAL_SPI_Init(&hspi0) != HAL_OK) {
+        xprintf("SPI_Init_Error\r\n");
+    }
+}
+
+static void RFID_MonitorLoop(void)
+{
+    while (1) {
+        if (!PICC_IsNewCardPresent(&mfrc522)) {
+            HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
+            continue;
+        }
+
+        if (!PICC_ReadCardSerial(&mfrc522)) {
+            HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
+            continue;
+        }
+
+        xprintf("RFID с UID ");
+        print_rfid_uid(&mfrc522.uid);
+        xprintf(" поднесли\r\n");
+
+        (void)PICC_HaltA(&mfrc522);
+        HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
+    }
+}
+
+static void print_rfid_uid(const Uid *uid)
+{
+    byte index;
+
+    for (index = 0; index < uid->size; ++index) {
+        if (index != 0) {
+            xprintf(" ");
+        }
+        xprintf("%02X", uid->uidByte[index]);
+    }
+}
+
+#if 0
+/* Старые UART game helpers оставлены для последующего объединения с RFID UID. */
 static void print_help(void)
 {
     xprintf("\r\nRock Paper Scissors over UART\r\n");
@@ -296,3 +403,4 @@ static GameStatus save_user(GameUser *user)
     print_save_status(status, user);
     return status;
 }
+#endif
