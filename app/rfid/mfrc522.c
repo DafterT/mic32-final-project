@@ -5,6 +5,17 @@
 
 #include <stddef.h>
 
+static void mfrc522_enable_gpio_clock(GPIO_TypeDef *port)
+{
+    if (port == GPIO_0) {
+        __HAL_PCC_GPIO_0_CLK_ENABLE();
+    } else if (port == GPIO_1) {
+        __HAL_PCC_GPIO_1_CLK_ENABLE();
+    } else if (port == GPIO_2) {
+        __HAL_PCC_GPIO_2_CLK_ENABLE();
+    }
+}
+
 static void __attribute__((section(".ram_text.mfrc522"))) mfrc522_select(MFRC522 *mfrc522)
 {
     HAL_SPI_Enable(mfrc522->spi);
@@ -43,9 +54,8 @@ void MFRC522_Init(MFRC522 *mfrc522,
     mfrc522->_resetPowerDownPort = resetPowerDownPort;
     mfrc522->_resetPowerDownPin = resetPowerDownPin;
 
-    __HAL_PCC_GPIO_0_CLK_ENABLE();
-    __HAL_PCC_GPIO_1_CLK_ENABLE();
-    __HAL_PCC_GPIO_2_CLK_ENABLE();
+    mfrc522_enable_gpio_clock(chipSelectPort);
+    mfrc522_enable_gpio_clock(resetPowerDownPort);
 
     GPIO_InitTypeDef gpio = {0};
     gpio.Pin = chipSelectPin;
@@ -54,13 +64,11 @@ void MFRC522_Init(MFRC522 *mfrc522,
     HAL_GPIO_Init(chipSelectPort, &gpio);
     HAL_GPIO_WritePin(chipSelectPort, chipSelectPin, GPIO_PIN_HIGH);
 
-    if (resetPowerDownPort != NULL) {
-        gpio.Pin = resetPowerDownPin;
-        gpio.Mode = HAL_GPIO_MODE_GPIO_OUTPUT;
-        gpio.Pull = HAL_GPIO_PULL_NONE;
-        HAL_GPIO_Init(resetPowerDownPort, &gpio);
-        HAL_GPIO_WritePin(resetPowerDownPort, resetPowerDownPin, GPIO_PIN_HIGH);
-    }
+    gpio.Pin = resetPowerDownPin;
+    gpio.Mode = HAL_GPIO_MODE_GPIO_OUTPUT;
+    gpio.Pull = HAL_GPIO_PULL_NONE;
+    HAL_GPIO_Init(resetPowerDownPort, &gpio);
+    HAL_GPIO_WritePin(resetPowerDownPort, resetPowerDownPin, GPIO_PIN_HIGH);
 }
 
 void __attribute__((section(".ram_text.mfrc522"))) PCD_WriteRegister(MFRC522 *mfrc522, PCD_Register reg, byte value)
@@ -163,21 +171,12 @@ StatusCode __attribute__((section(".ram_text.mfrc522"))) PCD_CalculateCRC(MFRC52
 
 void PCD_Init(MFRC522 *mfrc522)
 {
-    bool hardReset = false;
-
     HAL_GPIO_WritePin(mfrc522->_chipSelectPort, mfrc522->_chipSelectPin, GPIO_PIN_HIGH);
 
-    if (mfrc522->_resetPowerDownPort != NULL) {
-        HAL_GPIO_WritePin(mfrc522->_resetPowerDownPort, mfrc522->_resetPowerDownPin, GPIO_PIN_LOW);
-        HAL_DelayUs(2);
-        HAL_GPIO_WritePin(mfrc522->_resetPowerDownPort, mfrc522->_resetPowerDownPin, GPIO_PIN_HIGH);
-        HAL_DelayMs(50);
-        hardReset = true;
-    }
-
-    if (!hardReset) {
-        PCD_Reset(mfrc522);
-    }
+    HAL_GPIO_WritePin(mfrc522->_resetPowerDownPort, mfrc522->_resetPowerDownPin, GPIO_PIN_LOW);
+    HAL_DelayUs(2);
+    HAL_GPIO_WritePin(mfrc522->_resetPowerDownPort, mfrc522->_resetPowerDownPin, GPIO_PIN_HIGH);
+    HAL_DelayMs(50);
 
     PCD_WriteRegister(mfrc522, TxModeReg, 0x00);
     PCD_WriteRegister(mfrc522, RxModeReg, 0x00);
