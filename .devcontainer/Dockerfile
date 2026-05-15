@@ -7,15 +7,21 @@ RUN apt install -y --no-install-recommends \
     ca-certificates \
     git \
     make \
+    build-essential \
     cmake \
     ninja-build \
     python3 \
+    gcovr \
+    ruby \
+    ruby-dev \
     openocd \
     picocom \
     zsh \
     && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+RUN gem install ceedling -v 1.0.1 --no-document
 
 ENV GIT_SSL_NO_VERIFY=true
 
