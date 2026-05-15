@@ -6,7 +6,7 @@ BUILD_DIR=build
 SERIAL_PORT?=/dev/ttyUSB0
 SERIAL_BOUDRATE?=115200
 
-.PHONY: clean flash monitor size_analyze_html size_analyze_rom size_analyze_ram size_analyze_sections
+.PHONY: clean flash monitor test coverage coverage_report size_analyze_html size_analyze_rom size_analyze_ram size_analyze_sections
 
 build_app: update_submodules $(BUILD_DIR)
 	cmake --build $(BUILD_DIR)
@@ -34,6 +34,15 @@ flash:
 
 monitor:
 	picocom $(SERIAL_PORT) -b $(SERIAL_BOUDRATE) --omap crcrlf --echo
+
+test:
+	ceedling test:all
+
+coverage:
+	ceedling gcov:all
+
+coverage_report:
+	ceedling gcov:all report:gcov
 
 size_analyze_html: build_app
 	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -Ha --rom -W $(BUILD_DIR)/app/base_project.elf > size-analyze-rom.html
