@@ -107,8 +107,6 @@
     - app/game
     - app/neural_network
     - app/rfid
-  :support:
-    - test/support
   :libraries: []
 
 # You can even specify specific files to add or remove from your test
