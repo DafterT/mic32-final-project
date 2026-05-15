@@ -12,11 +12,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential ruby ruby-dev gcovr
-          sudo gem install ceedling -v 1.0.1 --no-document
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Run unit tests
-        run: make test
+      - name: Build dev container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: .devcontainer/Dockerfile
+          tags: mik32-dev:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run unit tests in dev container
+        run: docker run --rm -v "${{ github.workspace }}:/work" -w /work mik32-dev:ci make test
