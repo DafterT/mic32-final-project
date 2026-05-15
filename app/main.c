@@ -21,22 +21,20 @@ MFRC522 mfrc522;
 static void SystemClock_Config(void);
 static void USART0_Init(void);
 static void SPI0_Init(void);
-static void RFID_MonitorLoop(void);
-static void print_rfid_uid(const Uid *uid);
-#if 0
-/* Старые UART game helpers оставлены для последующего объединения с RFID UID. */
+static bool read_rfid_card_once(GameUserId *id);
+static void copy_rfid_uid_to_user_id(const Uid *uid, GameUserId *id);
+static bool same_user_id(const GameUserId *left, const GameUserId *right);
 static void print_help(void);
 static void print_init_status(GameStatus status, const GameUser *user);
 static void print_save_status(GameStatus status, const GameUser *user);
 static void print_user_id(const GameUserId *id);
-static char read_command(USART_HandleTypeDef *uart);
+static bool try_read_command(USART_HandleTypeDef *uart, char *command);
 static bool parse_move(char command, GameMove *move);
 static const char *move_name(GameMove move);
 static const char *result_name(GameRoundResult result);
 static const char *status_name(GameStatus status);
 static bool status_is_fatal(GameStatus status);
 static GameStatus save_user(GameUser *user);
-#endif
 
 uint32_t HAL_Micros(void)
 {
@@ -60,6 +58,12 @@ void HAL_DelayMs(uint32_t time_ms)
 
 int main(void)
 {
+    GameUser user = {0};
+    GameUserId card_id = {0};
+    bool user_active = false;
+    bool menu_prompt_printed = false;
+    uint32_t next_rfid_poll_ms = 0u;
+
     SystemClock_Config();
     HAL_Init();
     HAL_Time_SCR1TIM_Init();
@@ -69,84 +73,86 @@ int main(void)
     MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
     PCD_Init(&mfrc522);
 
-    xprintf("\r\nRFID monitor over UART\r\n");
-    xprintf("Поднесите RFID метку к считывателю...\r\n");
-
-    RFID_MonitorLoop();
-
-#if 0
-    /* Старый UART game loop оставлен для последующего объединения с RFID UID. */
-    static GameUserId uart_user_id = {
-        .bytes = { 'U', 'A', 'R', 'T' },
-        .length = 4u
-    };
-    USART_HandleTypeDef uart0;
-    GameUser user = {0};
-    GameStatus status;
-
-    system_clock_config();
-    HAL_Init();
-    uart0_init(&uart0);
-
-    status = game_init_user(&uart_user_id, &user);
-    print_init_status(status, &user);
-    if (status_is_fatal(status)) {
-        while (1) {
-        }
-    }
-
-    print_help();
+    xprintf("\r\nRFID game over UART\r\n");
 
     while (1) {
         char command;
+        uint32_t now = HAL_Millis();
+
+        if (!user_active && !menu_prompt_printed) {
+            xprintf("\r\nmenu: apply RFID card\r\n");
+            menu_prompt_printed = true;
+        }
+
+        if (now >= next_rfid_poll_ms) {
+            next_rfid_poll_ms = now + RFID_POLL_DELAY_MS;
+
+            if (read_rfid_card_once(&card_id)) {
+                GameStatus status;
+
+                xprintf("\r\ncard uid=");
+                print_user_id(&card_id);
+                xprintf("\r\n");
+
+                if (!user_active) {
+                    status = game_init_user(&card_id, &user);
+                    print_init_status(status, &user);
+
+                    if (!status_is_fatal(status)) {
+                        user_active = true;
+                        menu_prompt_printed = false;
+                        print_help();
+                    }
+                    continue;
+                }
+
+                if (same_user_id(&card_id, &user.id)) {
+                    status = save_user(&user);
+                    if (!status_is_fatal(status)) {
+                        user_active = false;
+                        menu_prompt_printed = false;
+                        xprintf("returned to menu\r\n");
+                    }
+                    continue;
+                }
+
+                status = save_user(&user);
+                if (status_is_fatal(status)) {
+                    continue;
+                }
+
+                status = game_init_user(&card_id, &user);
+                print_init_status(status, &user);
+                if (status_is_fatal(status)) {
+                    user_active = false;
+                    menu_prompt_printed = false;
+                    continue;
+                }
+                print_help();
+                continue;
+            }
+        }
+
+        if (!user_active) {
+            HAL_ProgramDelayMs(1u);
+            continue;
+        }
+
+        if (!try_read_command(&husart0, &command)) {
+            HAL_ProgramDelayMs(1u);
+            continue;
+        }
+
         GameMove player_move;
         GameRound round;
-
-        xprintf("\r\nmove> ");
-        command = read_command(&uart0);
-        xprintf("%c\r\n", command);
 
         if ((command == 'h') || (command == 'H') || (command == '?')) {
             print_help();
             continue;
         }
 
-        if ((command == 'w') || (command == 'W')) {
-            (void)save_user(&user);
-            continue;
-        }
-
-        if ((command == 'n') || (command == 'N')) {
-            status = save_user(&user);
-            if (status_is_fatal(status)) {
-                continue;
-            }
-
-            status = game_init_user(&uart_user_id, &user);
-            print_init_status(status, &user);
-            continue;
-        }
-
-        if ((command == 'u') || (command == 'U')) {
-            char id_suffix;
-
-            status = save_user(&user);
-            if (status_is_fatal(status)) {
-                continue;
-            }
-
-            xprintf("uid char> ");
-            id_suffix = read_command(&uart0);
-            xprintf("%c\r\n", id_suffix);
-
-            uart_user_id.bytes[uart_user_id.length - 1u] = (uint8_t)id_suffix;
-            status = game_init_user(&uart_user_id, &user);
-            print_init_status(status, &user);
-            continue;
-        }
-
         if (!parse_move(command, &player_move)) {
-            xprintf("bad input. use r/p/s, 0/1/2, h, w, n, u\r\n");
+            xprintf("bad input. use r/p/s, 0/1/2, h\r\n");
             continue;
         }
 
@@ -164,7 +170,6 @@ int main(void)
                 (unsigned long)user.sessions_played,
                 user.dirty ? 1u : 0u);
     }
-#endif
 
     return 0;
 }
@@ -223,49 +228,74 @@ static void SPI0_Init(void)
     }
 }
 
-static void RFID_MonitorLoop(void)
+static bool read_rfid_card_once(GameUserId *id)
 {
-    while (1) {
-        if (!PICC_IsNewCardPresent(&mfrc522)) {
-            HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
-            continue;
-        }
+    if (id == NULL) {
+        return false;
+    }
 
-        if (!PICC_ReadCardSerial(&mfrc522)) {
-            HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
-            continue;
-        }
+    if (!PICC_IsNewCardPresent(&mfrc522)) {
+        return false;
+    }
 
-        xprintf("RFID с UID ");
-        print_rfid_uid(&mfrc522.uid);
-        xprintf(" поднесли\r\n");
-
-        (void)PICC_HaltA(&mfrc522);
+    if (!PICC_ReadCardSerial(&mfrc522)) {
         HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
+        return false;
     }
+
+    copy_rfid_uid_to_user_id(&mfrc522.uid, id);
+    (void)PICC_HaltA(&mfrc522);
+    HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
+
+    return id->length > 0u;
 }
 
-static void print_rfid_uid(const Uid *uid)
+static void copy_rfid_uid_to_user_id(const Uid *uid, GameUserId *id)
 {
-    byte index;
+    uint8_t index;
 
-    for (index = 0; index < uid->size; ++index) {
-        if (index != 0) {
-            xprintf(" ");
-        }
-        xprintf("%02X", uid->uidByte[index]);
+    if (id == NULL) {
+        return;
+    }
+
+    id->length = 0u;
+    for (index = 0u; index < GAME_USER_ID_MAX_BYTES; ++index) {
+        id->bytes[index] = 0u;
+    }
+
+    if ((uid == NULL) || (uid->size == 0u) || (uid->size > GAME_USER_ID_MAX_BYTES)) {
+        return;
+    }
+
+    id->length = uid->size;
+    for (index = 0u; index < id->length; ++index) {
+        id->bytes[index] = uid->uidByte[index];
     }
 }
 
-#if 0
-/* Старые UART game helpers оставлены для последующего объединения с RFID UID. */
+static bool same_user_id(const GameUserId *left, const GameUserId *right)
+{
+    uint8_t index;
+
+    if ((left == NULL) || (right == NULL) || (left->length != right->length)) {
+        return false;
+    }
+
+    for (index = 0u; index < left->length; ++index) {
+        if (left->bytes[index] != right->bytes[index]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void print_help(void)
 {
-    xprintf("\r\nRock Paper Scissors over UART\r\n");
-    xprintf("UID = UART demo user\r\n");
+    xprintf("\r\nRock Paper Scissors\r\n");
+    xprintf("same RFID card = save and menu\r\n");
+    xprintf("another RFID card = save and switch user\r\n");
     xprintf("r/0 = rock, p/1 = paper, s/2 = scissors\r\n");
-    xprintf("w = save snapshot, n = save and reload user\r\n");
-    xprintf("uX = save and switch UID to UARX\r\n");
     xprintf("h/? = help\r\n");
 }
 
@@ -298,24 +328,34 @@ static void print_user_id(const GameUserId *id)
 {
     uint8_t index;
 
+    if (id == NULL) {
+        return;
+    }
+
     for (index = 0u; index < id->length; ++index) {
-        xprintf("%c", id->bytes[index]);
+        if (index != 0u) {
+            xprintf(" ");
+        }
+        xprintf("%02X", id->bytes[index]);
     }
 }
 
-static char read_command(USART_HandleTypeDef *uart)
+static bool try_read_command(USART_HandleTypeDef *uart, char *command)
 {
-    char command;
+    char received;
 
-    do {
-        while (!HAL_USART_RXNE_ReadFlag(uart)) {
-        }
+    if ((uart == NULL) || (command == NULL) || !HAL_USART_RXNE_ReadFlag(uart)) {
+        return false;
+    }
 
-        command = HAL_USART_ReadByte(uart);
-        HAL_USART_RXNE_ClearFlag(uart);
-    } while ((command == '\r') || (command == '\n') || (command == ' '));
+    received = HAL_USART_ReadByte(uart);
+    HAL_USART_RXNE_ClearFlag(uart);
+    if ((received == '\r') || (received == '\n') || (received == ' ')) {
+        return false;
+    }
 
-    return command;
+    *command = received;
+    return true;
 }
 
 static bool parse_move(char command, GameMove *move)
@@ -403,4 +443,3 @@ static GameStatus save_user(GameUser *user)
     print_save_status(status, user);
     return status;
 }
-#endif
