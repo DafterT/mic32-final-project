@@ -18,6 +18,24 @@ USART_HandleTypeDef husart0;
 SPI_HandleTypeDef hspi0;
 MFRC522 mfrc522;
 
+typedef struct {
+    GameUser user;
+    GameUserId card_id;
+    bool user_active;
+    bool menu_prompt_printed;
+    uint32_t next_rfid_poll_ms;
+} AppContext;
+
+static bool app_poll_rfid(AppContext *context, uint32_t now);
+static void app_handle_card(AppContext *context, const GameUserId *card_id);
+static bool app_activate_user(AppContext *context, const GameUserId *card_id);
+static bool app_save_active_user(AppContext *context);
+static void app_enter_menu(AppContext *context);
+static void app_enter_game(AppContext *context);
+static void app_handle_command(AppContext *context, char command);
+static bool is_help_command(char command);
+static void print_round_result(GameMove player_move, const GameRound *round);
+static void print_user_stats(const GameUser *user);
 static void SystemClock_Config(void);
 static void USART0_Init(void);
 static void SPI0_Init(void);
@@ -58,11 +76,7 @@ void HAL_DelayMs(uint32_t time_ms)
 
 int main(void)
 {
-    GameUser user = {0};
-    GameUserId card_id = {0};
-    bool user_active = false;
-    bool menu_prompt_printed = false;
-    uint32_t next_rfid_poll_ms = 0u;
+    AppContext context = {0};
 
     SystemClock_Config();
     HAL_Init();
@@ -79,61 +93,16 @@ int main(void)
         char command;
         uint32_t now = HAL_Millis();
 
-        if (!user_active && !menu_prompt_printed) {
+        if (!context.user_active && !context.menu_prompt_printed) {
             xprintf("\r\nmenu: apply RFID card\r\n");
-            menu_prompt_printed = true;
+            context.menu_prompt_printed = true;
         }
 
-        if (now >= next_rfid_poll_ms) {
-            next_rfid_poll_ms = now + RFID_POLL_DELAY_MS;
-
-            if (read_rfid_card_once(&card_id)) {
-                GameStatus status;
-
-                xprintf("\r\ncard uid=");
-                print_user_id(&card_id);
-                xprintf("\r\n");
-
-                if (!user_active) {
-                    status = game_init_user(&card_id, &user);
-                    print_init_status(status, &user);
-
-                    if (!status_is_fatal(status)) {
-                        user_active = true;
-                        menu_prompt_printed = false;
-                        print_help();
-                    }
-                    continue;
-                }
-
-                if (same_user_id(&card_id, &user.id)) {
-                    status = save_user(&user);
-                    if (!status_is_fatal(status)) {
-                        user_active = false;
-                        menu_prompt_printed = false;
-                        xprintf("returned to menu\r\n");
-                    }
-                    continue;
-                }
-
-                status = save_user(&user);
-                if (status_is_fatal(status)) {
-                    continue;
-                }
-
-                status = game_init_user(&card_id, &user);
-                print_init_status(status, &user);
-                if (status_is_fatal(status)) {
-                    user_active = false;
-                    menu_prompt_printed = false;
-                    continue;
-                }
-                print_help();
-                continue;
-            }
+        if (app_poll_rfid(&context, now)) {
+            continue;
         }
 
-        if (!user_active) {
+        if (!context.user_active) {
             HAL_ProgramDelayMs(1u);
             continue;
         }
@@ -143,35 +112,166 @@ int main(void)
             continue;
         }
 
-        GameMove player_move;
-        GameRound round;
-
-        if ((command == 'h') || (command == 'H') || (command == '?')) {
-            print_help();
-            continue;
-        }
-
-        if (!parse_move(command, &player_move)) {
-            xprintf("bad input. use r/p/s, 0/1/2, h\r\n");
-            continue;
-        }
-
-        round = game_stage(&user, player_move);
-
-        xprintf("you=%s mcu=%s result=%s\r\n",
-                move_name(player_move),
-                move_name(round.device_move),
-                result_name(round.result));
-        xprintf("stats W/D/L: %lu/%lu/%lu rounds=%lu sessions=%lu dirty=%u\r\n",
-                (unsigned long)user.stats.wins,
-                (unsigned long)user.stats.draws,
-                (unsigned long)user.stats.losses,
-                (unsigned long)user.stats.rounds,
-                (unsigned long)user.sessions_played,
-                user.dirty ? 1u : 0u);
+        app_handle_command(&context, command);
     }
 
     return 0;
+}
+
+static bool app_poll_rfid(AppContext *context, uint32_t now)
+{
+    if ((context == NULL) || (now < context->next_rfid_poll_ms)) {
+        return false;
+    }
+
+    context->next_rfid_poll_ms = now + RFID_POLL_DELAY_MS;
+
+    if (!read_rfid_card_once(&context->card_id)) {
+        return false;
+    }
+
+    xprintf("\r\ncard uid=");
+    print_user_id(&context->card_id);
+    xprintf("\r\n");
+
+    app_handle_card(context, &context->card_id);
+    return true;
+}
+
+static void app_handle_card(AppContext *context, const GameUserId *card_id)
+{
+    if ((context == NULL) || (card_id == NULL)) {
+        return;
+    }
+
+    if (!context->user_active) {
+        (void)app_activate_user(context, card_id);
+        return;
+    }
+
+    if (same_user_id(card_id, &context->user.id)) {
+        if (app_save_active_user(context)) {
+            app_enter_menu(context);
+            xprintf("returned to menu\r\n");
+        }
+        return;
+    }
+
+    if (!app_save_active_user(context)) {
+        return;
+    }
+
+    if (!app_activate_user(context, card_id)) {
+        app_enter_menu(context);
+    }
+}
+
+static bool app_activate_user(AppContext *context, const GameUserId *card_id)
+{
+    GameStatus status;
+
+    if ((context == NULL) || (card_id == NULL)) {
+        return false;
+    }
+
+    status = game_init_user(card_id, &context->user);
+    print_init_status(status, &context->user);
+
+    if (status_is_fatal(status)) {
+        return false;
+    }
+
+    app_enter_game(context);
+    print_help();
+    return true;
+}
+
+static bool app_save_active_user(AppContext *context)
+{
+    GameStatus status;
+
+    if (context == NULL) {
+        return false;
+    }
+
+    status = save_user(&context->user);
+    return !status_is_fatal(status);
+}
+
+static void app_enter_menu(AppContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->user_active = false;
+    context->menu_prompt_printed = false;
+}
+
+static void app_enter_game(AppContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->user_active = true;
+    context->menu_prompt_printed = false;
+}
+
+static void app_handle_command(AppContext *context, char command)
+{
+    GameMove player_move;
+    GameRound round;
+
+    if (context == NULL) {
+        return;
+    }
+
+    if (is_help_command(command)) {
+        print_help();
+        return;
+    }
+
+    if (!parse_move(command, &player_move)) {
+        xprintf("bad input. use r/p/s, 0/1/2, h\r\n");
+        return;
+    }
+
+    round = game_stage(&context->user, player_move);
+    print_round_result(player_move, &round);
+    print_user_stats(&context->user);
+}
+
+static bool is_help_command(char command)
+{
+    return (command == 'h') || (command == 'H') || (command == '?');
+}
+
+static void print_round_result(GameMove player_move, const GameRound *round)
+{
+    if (round == NULL) {
+        return;
+    }
+
+    xprintf("you=%s mcu=%s result=%s\r\n",
+            move_name(player_move),
+            move_name(round->device_move),
+            result_name(round->result));
+}
+
+static void print_user_stats(const GameUser *user)
+{
+    if (user == NULL) {
+        return;
+    }
+
+    xprintf("stats W/D/L: %lu/%lu/%lu rounds=%lu sessions=%lu dirty=%u\r\n",
+            (unsigned long)user->stats.wins,
+            (unsigned long)user->stats.draws,
+            (unsigned long)user->stats.losses,
+            (unsigned long)user->stats.rounds,
+            (unsigned long)user->sessions_played,
+            user->dirty ? 1u : 0u);
 }
 
 void trap_handler(void)
