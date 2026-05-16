@@ -201,6 +201,7 @@
 
 # Configuration options specific to Unity. 
 :unity:
+  :use_param_tests: true
   :defines:
     - UNITY_EXCLUDE_FLOAT
 
