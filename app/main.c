@@ -1,3 +1,4 @@
+#include "buttons.h"
 #include "game.h"
 #include "mik32_hal.h"
 #include "mik32_hal_irq.h"
@@ -33,6 +34,7 @@ static bool app_save_active_user(AppContext *context);
 static void app_enter_menu(AppContext *context);
 static void app_enter_game(AppContext *context);
 static void app_handle_command(AppContext *context, char command);
+static void app_handle_move(AppContext *context, GameMove player_move);
 static bool is_help_command(char command);
 static void print_round_result(GameMove player_move, const GameRound *round);
 static void print_user_stats(const GameUser *user);
@@ -83,6 +85,7 @@ int main(void)
     HAL_Time_SCR1TIM_Init();
     USART0_Init();
     SPI0_Init();
+    buttons_init();
 
     MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
     PCD_Init(&mfrc522);
@@ -91,6 +94,7 @@ int main(void)
 
     while (1) {
         char command;
+        GameMove player_move;
         uint32_t now = HAL_Millis();
 
         if (!context.user_active && !context.menu_prompt_printed) {
@@ -104,6 +108,11 @@ int main(void)
 
         if (!context.user_active) {
             HAL_ProgramDelayMs(1u);
+            continue;
+        }
+
+        if (buttons_poll_move(now, &player_move)) {
+            app_handle_move(&context, player_move);
             continue;
         }
 
@@ -206,6 +215,7 @@ static void app_enter_menu(AppContext *context)
 
     context->user_active = false;
     context->menu_prompt_printed = false;
+    buttons_reset();
 }
 
 static void app_enter_game(AppContext *context)
@@ -216,12 +226,12 @@ static void app_enter_game(AppContext *context)
 
     context->user_active = true;
     context->menu_prompt_printed = false;
+    buttons_reset();
 }
 
 static void app_handle_command(AppContext *context, char command)
 {
     GameMove player_move;
-    GameRound round;
 
     if (context == NULL) {
         return;
@@ -234,6 +244,17 @@ static void app_handle_command(AppContext *context, char command)
 
     if (!parse_move(command, &player_move)) {
         xprintf("bad input. use r/p/s, 0/1/2, h\r\n");
+        return;
+    }
+
+    app_handle_move(context, player_move);
+}
+
+static void app_handle_move(AppContext *context, GameMove player_move)
+{
+    GameRound round;
+
+    if (context == NULL) {
         return;
     }
 
@@ -276,6 +297,10 @@ static void print_user_stats(const GameUser *user)
 
 void trap_handler(void)
 {
+    if (EPIC_CHECK_GPIO_IRQ()) {
+        buttons_handle_irq();
+    }
+
     HAL_EPIC_Clear(0xFFFFFFFF);
 }
 
@@ -395,6 +420,7 @@ static void print_help(void)
     xprintf("\r\nRock Paper Scissors\r\n");
     xprintf("same RFID card = save and menu\r\n");
     xprintf("another RFID card = save and switch user\r\n");
+    xprintf("buttons GPIO1_8/GPIO1_9/GPIO1_2 = rock/paper/scissors\r\n");
     xprintf("r/0 = rock, p/1 = paper, s/2 = scissors\r\n");
     xprintf("h/? = help\r\n");
 }

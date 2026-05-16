@@ -4,6 +4,7 @@ set(APP_NAME ${CMAKE_PROJECT_NAME})
 add_executable(${APP_NAME}
     startup.c
     main.c
+    buttons/buttons.c
     game/game.c
     game/game_storage.c
     game/game_storage_eeprom.c
@@ -14,6 +15,7 @@ add_executable(${APP_NAME}
 
 target_include_directories(${APP_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/buttons
     ${CMAKE_CURRENT_SOURCE_DIR}/game
     ${CMAKE_CURRENT_SOURCE_DIR}/neural_network
     ${CMAKE_CURRENT_SOURCE_DIR}/rfid
