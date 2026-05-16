@@ -1,10 +1,12 @@
 #include "buttons.h"
 #include "game.h"
 #include "mik32_hal.h"
+#include "mik32_hal_i2c.h"
 #include "mik32_hal_irq.h"
 #include "mik32_hal_scr1_timer.h"
 #include "mik32_hal_spi.h"
 #include "mik32_hal_usart.h"
+#include "lcd_driver.h"
 #include "mfrc522.h"
 #include "rfid_config.h"
 #include "xprintf.h"
@@ -14,6 +16,9 @@
 
 #define UART_BAUDRATE 115200u
 #define MOVE_COUNT    3u
+
+I2C_HandleTypeDef hi2c;
+USART_HandleTypeDef husart0;
 
 static SPI_HandleTypeDef hspi0;
 static MFRC522 mfrc522;
@@ -37,6 +42,7 @@ static void print_round_result(GameMove player_move, const GameRound *round);
 static void print_user_stats(const GameUser *user);
 static void SystemClock_Config(void);
 static void USART0_Init(void);
+static void I2C1_Init(void);
 static void SPI0_Init(void);
 static bool read_rfid_card_once(GameUserId *id);
 static void copy_rfid_uid_to_user_id(const Uid *uid, GameUserId *id);
@@ -79,8 +85,14 @@ int main(void)
     HAL_Init();
     HAL_Time_SCR1TIM_Init();
     USART0_Init();
+    I2C1_Init();
     SPI0_Init();
     buttons_init();
+
+    lcd_init();
+    lcd_clear();
+    lcd_send_string("RFID button game", 0, 0);
+    lcd_send_string("Apply RFID card", 1, 0);
 
     MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
     PCD_Init(&mfrc522);
@@ -286,7 +298,7 @@ static void SystemClock_Config(void)
 
 static void USART0_Init(void)
 {
-    USART_HandleTypeDef husart0 = {0};
+    husart0 = (USART_HandleTypeDef){0};
 
     husart0.Instance = UART_0;
     husart0.transmitting = Enable;
@@ -295,6 +307,25 @@ static void USART0_Init(void)
     husart0.baudrate = UART_BAUDRATE;
 
     (void)HAL_USART_Init(&husart0);
+}
+
+static void I2C1_Init(void)
+{
+    hi2c = (I2C_HandleTypeDef){0};
+    hi2c.Instance = I2C_1;
+    hi2c.Init.Mode = HAL_I2C_MODE_MASTER;
+    hi2c.Init.DigitalFilter = I2C_DIGITALFILTER_OFF;
+    hi2c.Init.AnalogFilter = I2C_ANALOGFILTER_DISABLE;
+    hi2c.Init.AutoEnd = I2C_AUTOEND_ENABLE;
+    hi2c.Clock.PRESC = 5;
+    hi2c.Clock.SCLDEL = 15;
+    hi2c.Clock.SDADEL = 15;
+    hi2c.Clock.SCLH = 15;
+    hi2c.Clock.SCLL = 15;
+
+    if (HAL_I2C_Init(&hi2c) != HAL_OK) {
+        xprintf("I2C_Init_Error\r\n");
+    }
 }
 
 static void SPI0_Init(void)
