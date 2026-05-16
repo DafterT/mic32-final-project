@@ -2,6 +2,7 @@ MIK32_HAL_DIR=hardware/mik32-hal
 MIK32_SHARED_DIR=hardware/mik32v2-shared
 
 BUILD_DIR=build
+CEEDLING_ENV=LC_ALL=C.UTF-8 LANG=C.UTF-8 RUBYOPT=-EUTF-8
 
 SERIAL_PORT?=/dev/ttyUSB0
 SERIAL_BOUDRATE?=115200
@@ -36,13 +37,13 @@ monitor:
 	picocom $(SERIAL_PORT) -b $(SERIAL_BOUDRATE) --omap crcrlf --echo
 
 test:
-	ceedling test:all
+	$(CEEDLING_ENV) ceedling test:all
 
 coverage:
-	ceedling gcov:all
+	$(CEEDLING_ENV) ceedling gcov:all
 
 coverage_report:
-	ceedling gcov:all report:gcov
+	$(CEEDLING_ENV) ceedling gcov:all report:gcov
 
 size_analyze_html: build_app
 	elf-size-analyze -t $(MIK32_TOOLCHAIN_DIR)/riscv-none-elf- -Ha --rom -W $(BUILD_DIR)/app/base_project.elf > size-analyze-rom.html
