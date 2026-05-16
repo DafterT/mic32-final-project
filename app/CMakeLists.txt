@@ -6,6 +6,7 @@ add_executable(${APP_NAME}
     main.c
     game/game.c
     game/game_storage.c
+    game/game_storage_eeprom.c
     neural_network/model_weights.c
     neural_network/quant_model.c
     rfid/mfrc522.c

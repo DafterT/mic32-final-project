@@ -1,14 +1,12 @@
 #include "game_storage.h"
 
+#include "game_storage_backend.h"
 #include "game_storage_format.h"
 #include "model_weights.h"
-#include "mik32_hal.h"
-#include "mik32_hal_eeprom.h"
 
 #include <stddef.h>
 #include <string.h>
 
-#define GAME_EEPROM_TIMEOUT 100000u
 #define STORAGE_SLOT_NONE   (-1)
 #define GAME_EEPROM_ERASED_BYTE ((uint8_t)GAME_EEPROM_ERASED_WORD)
 #define GAME_STORAGE_CRC_LENGTH ((uint32_t)offsetof(GameStorageRecord, crc32))
@@ -30,21 +28,17 @@ typedef struct {
     uint32_t eviction_rounds;
 } StorageScan;
 
-static GameStatus eeprom_erase_slot(uint8_t slot_index);
 static bool storage_record_is_empty(const GameStorageRecord *record);
 static bool storage_record_is_valid(const GameStorageRecord *record);
 static uint32_t storage_crc32(const void *data, uint32_t length);
 static uint32_t storage_uid_hash(const GameUserId *id);
 
-static uint16_t storage_slot_address(uint8_t slot_index);
 static bool storage_user_id_is_valid(const GameUserId *id);
 static bool storage_record_header_is_known(const GameStorageRecord *record);
 static bool storage_record_uid_is_valid(const GameStorageRecord *record);
 static StorageSlotState storage_record_state(const GameStorageRecord *record);
 static bool storage_record_matches_uid(const GameStorageRecord *record, const GameUserId *id);
 static bool storage_record_is_better_eviction(const StorageScan *scan, const GameStorageRecord *record);
-static GameStatus storage_read_record(uint8_t slot_index, GameStorageRecord *record);
-static GameStatus storage_write_record(uint8_t slot_index, const GameStorageRecord *record);
 static GameStatus storage_scan_slots(const GameUserId *id, StorageScan *scan);
 static void storage_scan_init(StorageScan *scan);
 static void storage_scan_update(StorageScan *scan,
@@ -57,30 +51,9 @@ static void storage_record_to_user(const GameStorageRecord *record, GameUser *us
 static void storage_user_to_record(const GameUser *user, uint32_t sessions_to_store, GameStorageRecord *record);
 static GameStatus storage_verify_written_record(uint8_t slot_index, const GameStorageRecord *expected);
 
-static HAL_EEPROM_HandleTypeDef eeprom;
-static bool eeprom_initialized = false;
-
 GameStatus game_storage_init(void)
 {
-    if (eeprom_initialized) {
-        return GAME_STATUS_OK;
-    }
-
-    __HAL_PCC_EEPROM_CLK_ENABLE();
-
-    eeprom.Instance = EEPROM_REGS;
-    eeprom.Mode = HAL_EEPROM_MODE_TWO_STAGE;
-    eeprom.ErrorCorrection = HAL_EEPROM_ECC_ENABLE;
-    eeprom.EnableInterrupt = HAL_EEPROM_SERR_DISABLE;
-
-    if (HAL_EEPROM_Init(&eeprom) != HAL_OK) {
-        return GAME_STATUS_STORAGE_ERROR;
-    }
-
-    HAL_EEPROM_CalculateTimings(&eeprom, OSC_SYSTEM_VALUE);
-    eeprom_initialized = true;
-
-    return GAME_STATUS_OK;
+    return game_storage_backend_init();
 }
 
 GameStatus game_storage_load_user(const GameUserId *id, GameUser *user)
@@ -100,7 +73,7 @@ GameStatus game_storage_load_user(const GameUserId *id, GameUser *user)
     for (slot_index = 0u; slot_index < GAME_EEPROM_SLOT_COUNT; ++slot_index) {
         GameStorageRecord record;
 
-        status = storage_read_record(slot_index, &record);
+        status = game_storage_backend_read_record(slot_index, &record);
         if (status != GAME_STATUS_OK) {
             return status;
         }
@@ -112,7 +85,7 @@ GameStatus game_storage_load_user(const GameUserId *id, GameUser *user)
         }
 
         if (record.crc32 != storage_crc32(&record, GAME_STORAGE_CRC_LENGTH)) {
-            status = eeprom_erase_slot(slot_index);
+            status = game_storage_backend_erase_record(slot_index);
             if (status != GAME_STATUS_OK) {
                 return status;
             }
@@ -165,13 +138,13 @@ GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_sto
         return GAME_STATUS_STORAGE_FULL;
     }
 
-    status = eeprom_erase_slot((uint8_t)target_slot);
+    status = game_storage_backend_erase_record((uint8_t)target_slot);
     if (status != GAME_STATUS_OK) {
         return status;
     }
 
     storage_user_to_record(user, sessions_to_store, &record);
-    status = storage_write_record((uint8_t)target_slot, &record);
+    status = game_storage_backend_write_record((uint8_t)target_slot, &record);
     if (status != GAME_STATUS_OK) {
         return status;
     }
@@ -182,23 +155,6 @@ GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_sto
     }
 
     return save_status;
-}
-
-static GameStatus eeprom_erase_slot(uint8_t slot_index)
-{
-    if (slot_index >= GAME_EEPROM_SLOT_COUNT) {
-        return GAME_STATUS_INVALID_ARG;
-    }
-
-    if (HAL_EEPROM_Erase(&eeprom,
-                         storage_slot_address(slot_index),
-                         GAME_EEPROM_WORDS_PER_PAGE,
-                         HAL_EEPROM_WRITE_SINGLE,
-                         GAME_EEPROM_TIMEOUT) != HAL_OK) {
-        return GAME_STATUS_STORAGE_ERROR;
-    }
-
-    return GAME_STATUS_OK;
 }
 
 static bool storage_record_is_empty(const GameStorageRecord *record)
@@ -259,11 +215,6 @@ static uint32_t storage_uid_hash(const GameUserId *id)
     }
 
     return hash;
-}
-
-static uint16_t storage_slot_address(uint8_t slot_index)
-{
-    return (uint16_t)(GAME_EEPROM_BASE_OFFSET + ((uint32_t)slot_index * GAME_EEPROM_PAGE_SIZE));
 }
 
 static bool storage_user_id_is_valid(const GameUserId *id)
@@ -327,48 +278,6 @@ static bool storage_record_is_better_eviction(const StorageScan *scan, const Gam
     return record->stats_rounds < scan->eviction_rounds;
 }
 
-static GameStatus storage_read_record(uint8_t slot_index, GameStorageRecord *record)
-{
-    uint32_t words[GAME_EEPROM_WORDS_PER_PAGE];
-
-    if ((slot_index >= GAME_EEPROM_SLOT_COUNT) || (record == NULL)) {
-        return GAME_STATUS_INVALID_ARG;
-    }
-
-    if (HAL_EEPROM_Read(&eeprom,
-                        storage_slot_address(slot_index),
-                        words,
-                        GAME_EEPROM_WORDS_PER_PAGE,
-                        GAME_EEPROM_TIMEOUT) != HAL_OK) {
-        return GAME_STATUS_STORAGE_ERROR;
-    }
-
-    memcpy(record, words, sizeof(*record));
-    return GAME_STATUS_OK;
-}
-
-static GameStatus storage_write_record(uint8_t slot_index, const GameStorageRecord *record)
-{
-    uint32_t write_words[GAME_EEPROM_WORDS_PER_PAGE];
-
-    if ((slot_index >= GAME_EEPROM_SLOT_COUNT) || (record == NULL)) {
-        return GAME_STATUS_INVALID_ARG;
-    }
-
-    memcpy(write_words, record, sizeof(*record));
-
-    if (HAL_EEPROM_Write(&eeprom,
-                         storage_slot_address(slot_index),
-                         write_words,
-                         GAME_EEPROM_WORDS_PER_PAGE,
-                         HAL_EEPROM_WRITE_SINGLE,
-                         GAME_EEPROM_TIMEOUT) != HAL_OK) {
-        return GAME_STATUS_STORAGE_ERROR;
-    }
-
-    return GAME_STATUS_OK;
-}
-
 static GameStatus storage_scan_slots(const GameUserId *id, StorageScan *scan)
 {
     uint8_t slot_index;
@@ -383,7 +292,7 @@ static GameStatus storage_scan_slots(const GameUserId *id, StorageScan *scan)
         GameStorageRecord record;
         GameStatus status;
 
-        status = storage_read_record(slot_index, &record);
+        status = game_storage_backend_read_record(slot_index, &record);
         if (status != GAME_STATUS_OK) {
             return status;
         }
@@ -495,7 +404,7 @@ static GameStatus storage_verify_written_record(uint8_t slot_index, const GameSt
     GameStorageRecord actual;
     GameStatus status;
 
-    status = storage_read_record(slot_index, &actual);
+    status = game_storage_backend_read_record(slot_index, &actual);
     if (status != GAME_STATUS_OK) {
         return status;
     }
