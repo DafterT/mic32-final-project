@@ -3,12 +3,11 @@
 #include "mik32_hal.h"
 #include "lcd_driver.h"
 #include "mik32_hal_i2c.h"
-#include "mik32_hal_usart.h"
+#include "xprintf.h"
 #include "stdlib.h"
 #include "math.h"
 
 extern I2C_HandleTypeDef hi2c;  // change your handler here accordingly
-extern USART_HandleTypeDef husart0;
 
 #define SLAVE_ADDRESS_LCD 0x27 // change this according to ur setup
 #define RADIX_DEC 10
@@ -31,7 +30,7 @@ void lcd_send_cmd (char cmd)
 	data_t[3] = data_l|0x08;  //en=0, rs=0 -> bxxxx1000
 
 	if(HAL_OK != HAL_I2C_Master_Transmit (&hi2c, SLAVE_ADDRESS_LCD, data_t, 4, I2C_TIMEOUT_DEFAULT)) {
-		HAL_USART_Print(&husart0, "No Cmd sent\r\n", USART_TIMEOUT_DEFAULT);
+		xprintf("No Cmd sent\r\n");
 	}
 }
 
@@ -47,7 +46,7 @@ void lcd_send_data (char data)
 	data_t[3] = data_l|0x09;  //en=0, rs=0 -> bxxxx1001
 	
 	if(HAL_OK != HAL_I2C_Master_Transmit (&hi2c, SLAVE_ADDRESS_LCD, data_t, 4, I2C_TIMEOUT_DEFAULT)) {
-		HAL_USART_Print(&husart0, "No Data sent\r\n", USART_TIMEOUT_DEFAULT);
+		xprintf("No Data sent\r\n");
 	}
 }
 

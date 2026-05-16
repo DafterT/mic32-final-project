@@ -18,7 +18,6 @@
 #define MOVE_COUNT    3u
 
 I2C_HandleTypeDef hi2c;
-USART_HandleTypeDef husart0;
 
 static SPI_HandleTypeDef hspi0;
 static MFRC522 mfrc522;
@@ -298,7 +297,7 @@ static void SystemClock_Config(void)
 
 static void USART0_Init(void)
 {
-    husart0 = (USART_HandleTypeDef){0};
+    USART_HandleTypeDef husart0 = {0};
 
     husart0.Instance = UART_0;
     husart0.transmitting = Enable;
