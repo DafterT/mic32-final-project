@@ -12,6 +12,7 @@ extern I2C_HandleTypeDef hi2c;  // change your handler here accordingly
 #define SLAVE_ADDRESS_LCD 0x27 // change this according to ur setup
 #define RADIX_DEC 10
 #define ROUND_MULTIP 100
+#define LCD_CGRAM_ADDRESS 0x40
 
 static void send_raw_data(const char* str)
 {
@@ -136,4 +137,24 @@ void lcd_send_double(double value, int row, int col)
 	lcd_send_data('.');
 	itoa(fractional_part, buffer, RADIX_DEC);
     send_raw_data(buffer);
+}
+
+void lcd_create_char(uint8_t slot, const uint8_t bitmap[LCD_CUSTOM_CHAR_ROWS])
+{
+	if (bitmap == NULL) {
+		return;
+	}
+
+	slot %= LCD_CUSTOM_CHAR_COUNT;
+	lcd_send_cmd(LCD_CGRAM_ADDRESS | (slot << 3));
+
+	for (int i = 0; i < LCD_CUSTOM_CHAR_ROWS; i++) {
+		lcd_send_data(bitmap[i] & 0x1F);
+	}
+}
+
+void lcd_send_custom_char(uint8_t slot, int row, int col)
+{
+	lcd_put_cur(row, col);
+	lcd_send_data(slot % LCD_CUSTOM_CHAR_COUNT);
 }

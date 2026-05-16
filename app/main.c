@@ -16,6 +16,18 @@
 
 #define UART_BAUDRATE 115200u
 #define MOVE_COUNT    3u
+#define LCD_SMILE_SLOT 0u
+
+static const uint8_t LCD_SMILE_BITMAP[LCD_CUSTOM_CHAR_ROWS] = {
+    0x00,
+    0x0A,
+    0x0A,
+    0x00,
+    0x11,
+    0x0E,
+    0x00,
+    0x00,
+};
 
 I2C_HandleTypeDef hi2c;
 
@@ -89,9 +101,11 @@ int main(void)
     buttons_init();
 
     lcd_init();
+    lcd_create_char(LCD_SMILE_SLOT, LCD_SMILE_BITMAP);
     lcd_clear();
     lcd_send_string("RFID button game", 0, 0);
     lcd_send_string("Apply RFID card", 1, 0);
+    lcd_send_custom_char(LCD_SMILE_SLOT, 1, 15);
 
     MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
     PCD_Init(&mfrc522);
