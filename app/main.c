@@ -15,9 +15,8 @@
 #define UART_BAUDRATE 115200u
 #define MOVE_COUNT    3u
 
-USART_HandleTypeDef husart0;
-SPI_HandleTypeDef hspi0;
-MFRC522 mfrc522;
+static SPI_HandleTypeDef hspi0;
+static MFRC522 mfrc522;
 
 typedef struct {
     GameUser user;
@@ -33,9 +32,7 @@ static bool app_activate_user(AppContext *context, const GameUserId *card_id);
 static bool app_save_active_user(AppContext *context);
 static void app_enter_menu(AppContext *context);
 static void app_enter_game(AppContext *context);
-static void app_handle_command(AppContext *context, char command);
 static void app_handle_move(AppContext *context, GameMove player_move);
-static bool is_help_command(char command);
 static void print_round_result(GameMove player_move, const GameRound *round);
 static void print_user_stats(const GameUser *user);
 static void SystemClock_Config(void);
@@ -48,8 +45,6 @@ static void print_help(void);
 static void print_init_status(GameStatus status, const GameUser *user);
 static void print_save_status(GameStatus status, const GameUser *user);
 static void print_user_id(const GameUserId *id);
-static bool try_read_command(USART_HandleTypeDef *uart, char *command);
-static bool parse_move(char command, GameMove *move);
 static const char *move_name(GameMove move);
 static const char *result_name(GameRoundResult result);
 static const char *status_name(GameStatus status);
@@ -90,10 +85,9 @@ int main(void)
     MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
     PCD_Init(&mfrc522);
 
-    xprintf("\r\nRFID game over UART\r\n");
+    xprintf("\r\nRFID button game\r\n");
 
     while (1) {
-        char command;
         GameMove player_move;
         uint32_t now = HAL_Millis();
 
@@ -115,13 +109,6 @@ int main(void)
             app_handle_move(&context, player_move);
             continue;
         }
-
-        if (!try_read_command(&husart0, &command)) {
-            HAL_ProgramDelayMs(1u);
-            continue;
-        }
-
-        app_handle_command(&context, command);
     }
 
     return 0;
@@ -229,27 +216,6 @@ static void app_enter_game(AppContext *context)
     buttons_reset();
 }
 
-static void app_handle_command(AppContext *context, char command)
-{
-    GameMove player_move;
-
-    if (context == NULL) {
-        return;
-    }
-
-    if (is_help_command(command)) {
-        print_help();
-        return;
-    }
-
-    if (!parse_move(command, &player_move)) {
-        xprintf("bad input. use r/p/s, 0/1/2, h\r\n");
-        return;
-    }
-
-    app_handle_move(context, player_move);
-}
-
 static void app_handle_move(AppContext *context, GameMove player_move)
 {
     GameRound round;
@@ -261,11 +227,6 @@ static void app_handle_move(AppContext *context, GameMove player_move)
     round = game_stage(&context->user, player_move);
     print_round_result(player_move, &round);
     print_user_stats(&context->user);
-}
-
-static bool is_help_command(char command)
-{
-    return (command == 'h') || (command == 'H') || (command == '?');
 }
 
 static void print_round_result(GameMove player_move, const GameRound *round)
@@ -325,14 +286,15 @@ static void SystemClock_Config(void)
 
 static void USART0_Init(void)
 {
-    husart0 = (USART_HandleTypeDef){0};
+    USART_HandleTypeDef husart0 = {0};
+
     husart0.Instance = UART_0;
     husart0.transmitting = Enable;
-    husart0.receiving = Enable;
+    husart0.receiving = Disable;
     husart0.xck_mode = XCK_Mode3;
     husart0.baudrate = UART_BAUDRATE;
 
-    HAL_USART_Init(&husart0);
+    (void)HAL_USART_Init(&husart0);
 }
 
 static void SPI0_Init(void)
@@ -421,8 +383,6 @@ static void print_help(void)
     xprintf("same RFID card = save and menu\r\n");
     xprintf("another RFID card = save and switch user\r\n");
     xprintf("buttons GPIO1_8/GPIO1_9/GPIO1_2 = rock/paper/scissors\r\n");
-    xprintf("r/0 = rock, p/1 = paper, s/2 = scissors\r\n");
-    xprintf("h/? = help\r\n");
 }
 
 static void print_init_status(GameStatus status, const GameUser *user)
@@ -463,47 +423,6 @@ static void print_user_id(const GameUserId *id)
             xprintf(" ");
         }
         xprintf("%02X", id->bytes[index]);
-    }
-}
-
-static bool try_read_command(USART_HandleTypeDef *uart, char *command)
-{
-    char received;
-
-    if ((uart == NULL) || (command == NULL) || !HAL_USART_RXNE_ReadFlag(uart)) {
-        return false;
-    }
-
-    received = HAL_USART_ReadByte(uart);
-    HAL_USART_RXNE_ClearFlag(uart);
-    if ((received == '\r') || (received == '\n') || (received == ' ')) {
-        return false;
-    }
-
-    *command = received;
-    return true;
-}
-
-static bool parse_move(char command, GameMove *move)
-{
-    switch (command) {
-    case 'r':
-    case 'R':
-    case '0':
-        *move = GAME_MOVE_ROCK;
-        return true;
-    case 'p':
-    case 'P':
-    case '1':
-        *move = GAME_MOVE_PAPER;
-        return true;
-    case 's':
-    case 'S':
-    case '2':
-        *move = GAME_MOVE_SCISSORS;
-        return true;
-    default:
-        return false;
     }
 }
 
