@@ -20,44 +20,81 @@
 
 #define UART_BAUDRATE 115200u
 #define MOVE_COUNT    3u
-#define LCD_SMILE_SLOT 0u
 
-static const uint8_t LCD_SMILE_BITMAP[LCD_CUSTOM_CHAR_ROWS] = {
-    0x00,
-    0x0A,
-    0x0A,
-    0x00,
-    0x11,
-    0x0E,
-    0x00,
-    0x00,
-};
+#define APP_SPLASH_MS     4000u
+#define APP_WELCOME_MS    2000u
+#define APP_CHANT_STEP_MS 400u
+#define APP_DUEL_MS       2000u
+#define APP_RESULT_MS     2000u
 
 I2C_HandleTypeDef hi2c;
 
 static SPI_HandleTypeDef hspi0;
 static MFRC522 mfrc522;
 
+typedef enum {
+    APP_STATE_SPLASH = 0u,
+    APP_STATE_MENU,
+    APP_STATE_WELCOME,
+    APP_STATE_WAIT_MOVE,
+    APP_STATE_CHANT,
+    APP_STATE_DUEL,
+    APP_STATE_RESULT
+} AppState;
+
 typedef struct {
     GameUser user;
     GameUserId card_id;
+    GameUser menu_users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t menu_user_count;
+    uint8_t menu_index;
     bool user_active;
-    bool menu_prompt_printed;
     uint32_t next_rfid_poll_ms;
+    AppState state;
+    uint32_t state_until_ms;
+    uint8_t chant_step;
+    GameMove last_player_move;
+    GameRound last_round;
 } AppContext;
 
-static bool app_poll_rfid(AppContext *context, uint32_t now);
-static void app_handle_card(AppContext *context, const GameUserId *card_id);
-static bool app_activate_user(AppContext *context, const GameUserId *card_id);
-static bool app_save_active_user(AppContext *context);
+static void app_enter_splash(AppContext *context, uint32_t now);
 static void app_enter_menu(AppContext *context);
-static void app_enter_game(AppContext *context);
-static void app_handle_move(AppContext *context, GameMove player_move);
-static void app_run_lcd_ui_demo(void);
-static void app_wait_lcd_ui_demo_rock(const char *step_name);
-static void print_storage_users_table(void);
+static void app_enter_welcome(AppContext *context, uint32_t now);
+static void app_enter_wait_move(AppContext *context);
+static void app_enter_chant(AppContext *context, uint32_t now);
+static void app_enter_duel(AppContext *context, uint32_t now);
+static void app_enter_result(AppContext *context, uint32_t now);
+static void app_update_state(AppContext *context, uint32_t now);
+static void app_poll_inputs(AppContext *context, uint32_t now);
+static bool app_poll_rfid(AppContext *context, uint32_t now);
+static bool app_poll_buttons(AppContext *context, uint32_t now);
+static void app_drain_locked_inputs(AppContext *context, AppState locked_state);
+static void app_handle_button(AppContext *context, GameMove move, uint32_t now);
+static void app_handle_menu_button(AppContext *context, GameMove move);
+static void app_handle_game_button(AppContext *context, GameMove player_move, uint32_t now);
+static void app_handle_card(AppContext *context, const GameUserId *card_id, uint32_t now);
+static bool app_activate_user(AppContext *context, const GameUserId *card_id, uint32_t now);
+static bool app_save_active_user(AppContext *context);
+static void app_load_menu_users(AppContext *context);
+static void app_sort_menu_users(AppContext *context);
+static bool app_menu_user_before(const GameUser *left, const GameUser *right);
+static void app_show_menu(const AppContext *context);
+static void app_clamp_menu_index(AppContext *context);
+static bool app_state_accepts_rfid(AppState state);
+static bool app_state_accepts_buttons(AppState state);
+static bool app_state_is_locked(AppState state);
+static bool time_reached(uint32_t now_ms, uint32_t deadline_ms);
+static uint32_t percent_u32(uint32_t value, uint32_t total);
+static const char *chant_word(uint8_t step);
+static const char *menu_action_name(GameMove move);
+static void log_card_accepted(const GameUserId *id);
+static void log_card_ignored(AppState state, const GameUserId *id);
+static void log_button_accepted_action(const char *action);
+static void log_button_accepted_move(GameMove move);
+static void log_button_ignored(AppState state, GameMove move);
 static void print_round_result(GameMove player_move, const GameRound *round);
-static void print_user_stats(const GameUser *user);
+static void print_init_status(GameStatus status, const GameUser *user);
+static void print_save_status(GameStatus status, const GameUser *user);
 static void SystemClock_Config(void);
 static void USART0_Init(void);
 static void I2C1_Init(void);
@@ -65,12 +102,10 @@ static void SPI0_Init(void);
 static bool read_rfid_card_once(GameUserId *id);
 static void copy_rfid_uid_to_user_id(const Uid *uid, GameUserId *id);
 static bool same_user_id(const GameUserId *left, const GameUserId *right);
-static void print_help(void);
-static void print_init_status(GameStatus status, const GameUser *user);
-static void print_save_status(GameStatus status, const GameUser *user);
 static void print_user_id(const GameUserId *id);
 static const char *move_name(GameMove move);
 static const char *result_name(GameRoundResult result);
+static const char *state_name(AppState state);
 static const char *status_name(GameStatus status);
 static bool status_is_fatal(GameStatus status);
 static GameStatus save_user(GameUser *user);
@@ -108,49 +143,176 @@ int main(void)
     buttons_init();
 
     lcd_init();
-    lcd_create_char(LCD_SMILE_SLOT, LCD_SMILE_BITMAP);
-    lcd_clear();
-    lcd_send_string("RFID button game", 0, 0);
-    lcd_send_string("Apply RFID card", 1, 0);
-    lcd_send_custom_char(LCD_SMILE_SLOT, 1, 15);
 
     MFRC522_Init(&mfrc522, &hspi0, RFID_CS_PORT, RFID_CS_PIN, RFID_RST_PORT, RFID_RST_PIN);
     PCD_Init(&mfrc522);
 
-    xprintf("\r\nRFID button game\r\n");
-    print_storage_users_table();
-    app_run_lcd_ui_demo();
+    xprintf("\r\ngame start\r\n");
+    app_enter_splash(&context, HAL_Millis());
 
     while (1) {
-        GameMove player_move;
         uint32_t now = HAL_Millis();
 
-        if (!context.user_active && !context.menu_prompt_printed) {
-            xprintf("\r\nmenu: apply RFID card\r\n");
-            context.menu_prompt_printed = true;
-        }
-
-        if (app_poll_rfid(&context, now)) {
-            continue;
-        }
-
-        if (!context.user_active) {
-            HAL_ProgramDelayMs(1u);
-            continue;
-        }
-
-        if (buttons_poll_move(now, &player_move)) {
-            app_handle_move(&context, player_move);
-            continue;
-        }
+        app_update_state(&context, now);
+        app_poll_inputs(&context, now);
     }
 
     return 0;
 }
 
+static void app_enter_splash(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_SPLASH;
+    context->state_until_ms = now + APP_SPLASH_MS;
+    game_lcd_show_splash();
+    buttons_reset();
+}
+
+static void app_enter_menu(AppContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_MENU;
+    context->user_active = false;
+    context->menu_index = 0u;
+    app_load_menu_users(context);
+    app_show_menu(context);
+    buttons_reset();
+}
+
+static void app_enter_welcome(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_WELCOME;
+    context->state_until_ms = now + APP_WELCOME_MS;
+    game_lcd_show_welcome(&context->user);
+    buttons_reset();
+}
+
+static void app_enter_wait_move(AppContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_WAIT_MOVE;
+    game_lcd_show_wait_move(&context->user);
+    buttons_reset();
+}
+
+static void app_enter_chant(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_CHANT;
+    context->chant_step = 0u;
+    context->state_until_ms = now + APP_CHANT_STEP_MS;
+    game_lcd_show_chant(chant_word(context->chant_step));
+    buttons_reset();
+}
+
+static void app_enter_duel(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_DUEL;
+    context->state_until_ms = now + APP_DUEL_MS;
+    game_lcd_show_duel(context->last_player_move, context->last_round.device_move);
+}
+
+static void app_enter_result(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    context->state = APP_STATE_RESULT;
+    context->state_until_ms = now + APP_RESULT_MS;
+    game_lcd_show_result(context->last_round.result, &context->user);
+}
+
+static void app_update_state(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    switch (context->state) {
+    case APP_STATE_SPLASH:
+        if (time_reached(now, context->state_until_ms)) {
+            app_drain_locked_inputs(context, APP_STATE_SPLASH);
+            app_enter_menu(context);
+        }
+        break;
+    case APP_STATE_WELCOME:
+        if (time_reached(now, context->state_until_ms)) {
+            app_drain_locked_inputs(context, APP_STATE_WELCOME);
+            app_enter_wait_move(context);
+        }
+        break;
+    case APP_STATE_CHANT:
+        if (!time_reached(now, context->state_until_ms)) {
+            break;
+        }
+        if (context->chant_step < 2u) {
+            context->chant_step += 1u;
+            context->state_until_ms = now + APP_CHANT_STEP_MS;
+            game_lcd_show_chant(chant_word(context->chant_step));
+        } else {
+            app_enter_duel(context, now);
+        }
+        break;
+    case APP_STATE_DUEL:
+        if (time_reached(now, context->state_until_ms)) {
+            app_enter_result(context, now);
+        }
+        break;
+    case APP_STATE_RESULT:
+        if (time_reached(now, context->state_until_ms)) {
+            app_drain_locked_inputs(context, APP_STATE_RESULT);
+            app_enter_wait_move(context);
+        }
+        break;
+    case APP_STATE_MENU:
+    case APP_STATE_WAIT_MOVE:
+    default:
+        break;
+    }
+}
+
+static void app_poll_inputs(AppContext *context, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    if (app_poll_rfid(context, now)) {
+        return;
+    }
+
+    (void)app_poll_buttons(context, now);
+}
+
 static bool app_poll_rfid(AppContext *context, uint32_t now)
 {
-    if ((context == NULL) || (now < context->next_rfid_poll_ms)) {
+    if ((context == NULL) || !app_state_accepts_rfid(context->state)) {
+        return false;
+    }
+
+    if (!time_reached(now, context->next_rfid_poll_ms)) {
         return false;
     }
 
@@ -160,29 +322,139 @@ static bool app_poll_rfid(AppContext *context, uint32_t now)
         return false;
     }
 
-    xprintf("\r\ncard uid=");
-    print_user_id(&context->card_id);
-    xprintf("\r\n");
-
-    app_handle_card(context, &context->card_id);
+    app_handle_card(context, &context->card_id, now);
     return true;
 }
 
-static void app_handle_card(AppContext *context, const GameUserId *card_id)
+static bool app_poll_buttons(AppContext *context, uint32_t now)
+{
+    GameMove move;
+
+    if (context == NULL) {
+        return false;
+    }
+
+    if (!buttons_poll_move(now, &move)) {
+        return false;
+    }
+
+    if (!app_state_accepts_buttons(context->state)) {
+        log_button_ignored(context->state, move);
+        return true;
+    }
+
+    app_handle_button(context, move, now);
+    return true;
+}
+
+static void app_drain_locked_inputs(AppContext *context, AppState locked_state)
+{
+    GameUserId ignored_id = {0};
+
+    if (context == NULL) {
+        return;
+    }
+
+    buttons_reset();
+    if (read_rfid_card_once(&ignored_id)) {
+        log_card_ignored(locked_state, &ignored_id);
+        context->next_rfid_poll_ms = HAL_Millis() + RFID_POLL_DELAY_MS;
+    }
+    buttons_reset();
+}
+
+static void app_handle_button(AppContext *context, GameMove move, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    switch (context->state) {
+    case APP_STATE_MENU:
+        app_handle_menu_button(context, move);
+        break;
+    case APP_STATE_WAIT_MOVE:
+        app_handle_game_button(context, move, now);
+        break;
+    default:
+        log_button_ignored(context->state, move);
+        break;
+    }
+}
+
+static void app_handle_menu_button(AppContext *context, GameMove move)
+{
+    uint8_t old_index;
+
+    if (context == NULL) {
+        return;
+    }
+
+    old_index = context->menu_index;
+    log_button_accepted_action(menu_action_name(move));
+
+    if (context->menu_user_count == 0u) {
+        return;
+    }
+
+    switch (move) {
+    case GAME_MOVE_ROCK:
+        if (context->menu_index > 0u) {
+            context->menu_index -= 1u;
+        }
+        break;
+    case GAME_MOVE_SCISSORS:
+        if ((uint8_t)(context->menu_index + 1u) < context->menu_user_count) {
+            context->menu_index += 1u;
+        }
+        break;
+    case GAME_MOVE_PAPER:
+        context->menu_index = 0u;
+        break;
+    default:
+        break;
+    }
+
+    if (context->menu_index != old_index) {
+        app_show_menu(context);
+    }
+}
+
+static void app_handle_game_button(AppContext *context, GameMove player_move, uint32_t now)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    if (!context->user_active) {
+        app_enter_menu(context);
+        return;
+    }
+
+    log_button_accepted_move(player_move);
+    context->last_player_move = player_move;
+    context->last_round = game_stage(&context->user, player_move);
+    print_round_result(player_move, &context->last_round);
+    app_enter_chant(context, now);
+}
+
+static void app_handle_card(AppContext *context, const GameUserId *card_id, uint32_t now)
 {
     if ((context == NULL) || (card_id == NULL)) {
         return;
     }
 
+    log_card_accepted(card_id);
+
     if (!context->user_active) {
-        (void)app_activate_user(context, card_id);
+        (void)app_activate_user(context, card_id, now);
         return;
     }
 
     if (same_user_id(card_id, &context->user.id)) {
         if (app_save_active_user(context)) {
+            xprintf("user returned menu reason=same_card\r\n");
             app_enter_menu(context);
-            xprintf("returned to menu\r\n");
         }
         return;
     }
@@ -191,12 +463,12 @@ static void app_handle_card(AppContext *context, const GameUserId *card_id)
         return;
     }
 
-    if (!app_activate_user(context, card_id)) {
+    if (!app_activate_user(context, card_id, now)) {
         app_enter_menu(context);
     }
 }
 
-static bool app_activate_user(AppContext *context, const GameUserId *card_id)
+static bool app_activate_user(AppContext *context, const GameUserId *card_id, uint32_t now)
 {
     GameStatus status;
 
@@ -211,8 +483,8 @@ static bool app_activate_user(AppContext *context, const GameUserId *card_id)
         return false;
     }
 
-    app_enter_game(context);
-    print_help();
+    context->user_active = true;
+    app_enter_welcome(context, now);
     return true;
 }
 
@@ -220,7 +492,7 @@ static bool app_save_active_user(AppContext *context)
 {
     GameStatus status;
 
-    if (context == NULL) {
+    if ((context == NULL) || !context->user_active) {
         return false;
     }
 
@@ -228,220 +500,204 @@ static bool app_save_active_user(AppContext *context)
     return !status_is_fatal(status);
 }
 
-static void app_enter_menu(AppContext *context)
+static void app_load_menu_users(AppContext *context)
 {
-    if (context == NULL) {
-        return;
-    }
-
-    context->user_active = false;
-    context->menu_prompt_printed = false;
-    buttons_reset();
-}
-
-static void app_enter_game(AppContext *context)
-{
-    if (context == NULL) {
-        return;
-    }
-
-    context->user_active = true;
-    context->menu_prompt_printed = false;
-    buttons_reset();
-}
-
-static void app_handle_move(AppContext *context, GameMove player_move)
-{
-    GameRound round;
-
-    if (context == NULL) {
-        return;
-    }
-
-    round = game_stage(&context->user, player_move);
-    print_round_result(player_move, &round);
-    print_user_stats(&context->user);
-}
-
-static void app_run_lcd_ui_demo(void)
-{
-    GameUser user_zero = {
-        .id = {
-            .bytes = {0x10u, 0x20u, 0x30u, 0x40u},
-            .length = 4u,
-        },
-        .stats = {
-            .rounds = 0u,
-            .wins = 0u,
-            .draws = 0u,
-            .losses = 0u,
-        },
-    };
-    GameUser user_balanced = {
-        .id = {
-            .bytes = {0xDEu, 0xADu, 0xBEu, 0xEFu},
-            .length = 4u,
-        },
-        .stats = {
-            .rounds = 123u,
-            .wins = 55u,
-            .draws = 13u,
-            .losses = 55u,
-        },
-    };
-    GameUser user_large = {
-        .id = {
-            .bytes = {0x01u, 0x23u, 0x45u, 0x67u, 0x89u},
-            .length = 5u,
-        },
-        .stats = {
-            .rounds = 1000u,
-            .wins = 450u,
-            .draws = 100u,
-            .losses = 450u,
-        },
-    };
-    GameUser user_long_stats = {
-        .id = {
-            .bytes = {0xAAu, 0xBBu, 0xCCu, 0xDDu, 0xEEu, 0xFFu},
-            .length = 6u,
-        },
-        .stats = {
-            .rounds = 131347u,
-            .wins = 123456u,
-            .draws = 7890u,
-            .losses = 1u,
-        },
-    };
-    uint8_t demo_player_move;
-    uint8_t demo_bot_move;
-
-    xprintf("\r\nlcd ui demo: press rock for next screen\r\n");
-    buttons_reset();
-
-    game_lcd_clear();
-    game_lcd_write_line(0u, "LCD UI demo");
-    game_lcd_write_line(1u, "Rock=next");
-    app_wait_lcd_ui_demo_rock("write_line after clear");
-
-    game_lcd_center_line(0u, "Centered");
-    game_lcd_write_line(1u, "short");
-    app_wait_lcd_ui_demo_rock("center then short line");
-
-    game_lcd_write_line(0u, "1234567890123456");
-    game_lcd_center_line(1u, "Win");
-    app_wait_lcd_ui_demo_rock("full width and centered");
-
-    game_lcd_show_splash();
-    app_wait_lcd_ui_demo_rock("splash");
-
-    game_lcd_show_chant("Rock");
-    app_wait_lcd_ui_demo_rock("chant rock");
-
-    game_lcd_show_menu_user(&user_zero, 0u, 3u);
-    app_wait_lcd_ui_demo_rock("menu zero stats");
-
-    game_lcd_show_menu_empty();
-    app_wait_lcd_ui_demo_rock("empty menu");
-
-    game_lcd_show_welcome(&user_balanced);
-    app_wait_lcd_ui_demo_rock("welcome balanced");
-
-    game_lcd_show_chant("Paper");
-    app_wait_lcd_ui_demo_rock("chant paper");
-
-    game_lcd_show_wait_move(&user_balanced);
-    app_wait_lcd_ui_demo_rock("wait move");
-
-    for (demo_player_move = 0u; demo_player_move < MOVE_COUNT; ++demo_player_move) {
-        for (demo_bot_move = 0u; demo_bot_move < MOVE_COUNT; ++demo_bot_move) {
-            game_lcd_show_duel((GameMove)demo_player_move, (GameMove)demo_bot_move);
-            xprintf("lcd ui demo duel you=%s bot=%s\r\n",
-                    move_name((GameMove)demo_player_move),
-                    move_name((GameMove)demo_bot_move));
-            app_wait_lcd_ui_demo_rock("duel");
-        }
-    }
-
-    game_lcd_show_result(GAME_ROUND_PLAYER_WIN, &user_balanced);
-    app_wait_lcd_ui_demo_rock("result win");
-
-    game_lcd_show_menu_user(&user_large, 10u, 12u);
-    app_wait_lcd_ui_demo_rock("menu large matches");
-
-    game_lcd_show_result(GAME_ROUND_DRAW, &user_large);
-    app_wait_lcd_ui_demo_rock("result draw");
-
-    game_lcd_show_chant("Scissors");
-    app_wait_lcd_ui_demo_rock("chant scissors");
-
-    game_lcd_show_result(GAME_ROUND_PLAYER_LOSS, &user_long_stats);
-    app_wait_lcd_ui_demo_rock("result long stats");
-
-    game_lcd_write_line(0u, "Tail clear test");
-    game_lcd_write_line(1u, "tiny");
-    app_wait_lcd_ui_demo_rock("tail clear");
-
-    game_lcd_show_menu_empty();
-    buttons_reset();
-    xprintf("lcd ui demo: complete\r\n");
-}
-
-static void app_wait_lcd_ui_demo_rock(const char *step_name)
-{
-    GameMove move;
-
-    xprintf("lcd ui demo step=%s\r\n", (step_name != NULL) ? step_name : "unknown");
-
-    while (true) {
-        if (buttons_poll_move(HAL_Millis(), &move)) {
-            if (move == GAME_MOVE_ROCK) {
-                return;
-            }
-
-            xprintf("lcd ui demo ignored move=%s; press rock\r\n", move_name(move));
-        }
-
-        HAL_ProgramDelayMs(1u);
-    }
-}
-
-static void print_storage_users_table(void)
-{
-    static GameUser users[GAME_EEPROM_SLOT_COUNT];
-    uint8_t count = 0u;
-    uint8_t index;
     GameStatus status;
 
-    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
-    xprintf("storage users status=%s count=%u\r\n", status_name(status), count);
-    if (status != GAME_STATUS_OK) {
+    if (context == NULL) {
         return;
     }
 
-    xprintf("idx hash16 uid rounds wins draws losses win_pct draw_pct sessions\r\n");
-    for (index = 0u; index < count; ++index) {
-        const GameUser *user = &users[index];
-        uint32_t rounds = user->stats.rounds;
-        uint32_t win_pct = 0u;
-        uint32_t draw_pct = 0u;
+    context->menu_user_count = 0u;
 
-        if (rounds != 0u) {
-            win_pct = (uint32_t)(((uint64_t)user->stats.wins * 100u) / rounds);
-            draw_pct = (uint32_t)(((uint64_t)user->stats.draws * 100u) / rounds);
-        }
-
-        xprintf("%u 0x%04X ", (unsigned int)(index + 1u), (unsigned int)uid_hash16(&user->id));
-        print_user_id(&user->id);
-        xprintf(" %lu %lu %lu %lu %lu %lu %lu\r\n",
-                (unsigned long)rounds,
-                (unsigned long)user->stats.wins,
-                (unsigned long)user->stats.draws,
-                (unsigned long)user->stats.losses,
-                (unsigned long)win_pct,
-                (unsigned long)draw_pct,
-                (unsigned long)user->sessions_played);
+    status = game_storage_list_users(context->menu_users, GAME_EEPROM_SLOT_COUNT, &context->menu_user_count);
+    if (status != GAME_STATUS_OK) {
+        xprintf("menu list status=%s\r\n", status_name(status));
+        context->menu_user_count = 0u;
+        return;
     }
+
+    app_sort_menu_users(context);
+    app_clamp_menu_index(context);
+}
+
+static void app_sort_menu_users(AppContext *context)
+{
+    uint8_t index;
+
+    if (context == NULL) {
+        return;
+    }
+
+    for (index = 1u; index < context->menu_user_count; ++index) {
+        GameUser key = context->menu_users[index];
+        uint8_t insert_index = index;
+
+        while ((insert_index > 0u) && app_menu_user_before(&key, &context->menu_users[insert_index - 1u])) {
+            context->menu_users[insert_index] = context->menu_users[insert_index - 1u];
+            insert_index -= 1u;
+        }
+        context->menu_users[insert_index] = key;
+    }
+}
+
+static bool app_menu_user_before(const GameUser *left, const GameUser *right)
+{
+    uint32_t left_win_pct;
+    uint32_t right_win_pct;
+    uint32_t left_draw_pct;
+    uint32_t right_draw_pct;
+    uint16_t left_hash;
+    uint16_t right_hash;
+
+    if ((left == NULL) || (right == NULL)) {
+        return false;
+    }
+
+    if (left->stats.rounds != right->stats.rounds) {
+        return left->stats.rounds > right->stats.rounds;
+    }
+
+    left_win_pct = percent_u32(left->stats.wins, left->stats.rounds);
+    right_win_pct = percent_u32(right->stats.wins, right->stats.rounds);
+    if (left_win_pct != right_win_pct) {
+        return left_win_pct > right_win_pct;
+    }
+
+    left_draw_pct = percent_u32(left->stats.draws, left->stats.rounds);
+    right_draw_pct = percent_u32(right->stats.draws, right->stats.rounds);
+    if (left_draw_pct != right_draw_pct) {
+        return left_draw_pct > right_draw_pct;
+    }
+
+    left_hash = uid_hash16(&left->id);
+    right_hash = uid_hash16(&right->id);
+    return left_hash < right_hash;
+}
+
+static void app_show_menu(const AppContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    if (context->menu_user_count == 0u) {
+        game_lcd_show_menu_empty();
+        return;
+    }
+
+    game_lcd_show_menu_user(&context->menu_users[context->menu_index],
+                            context->menu_index,
+                            context->menu_user_count);
+}
+
+static void app_clamp_menu_index(AppContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    if (context->menu_user_count == 0u) {
+        context->menu_index = 0u;
+        return;
+    }
+
+    if (context->menu_index >= context->menu_user_count) {
+        context->menu_index = (uint8_t)(context->menu_user_count - 1u);
+    }
+}
+
+static bool app_state_accepts_rfid(AppState state)
+{
+    return (state == APP_STATE_MENU) || (state == APP_STATE_WAIT_MOVE);
+}
+
+static bool app_state_accepts_buttons(AppState state)
+{
+    return (state == APP_STATE_MENU) || (state == APP_STATE_WAIT_MOVE);
+}
+
+static bool app_state_is_locked(AppState state)
+{
+    return !app_state_accepts_rfid(state) && !app_state_accepts_buttons(state);
+}
+
+static bool time_reached(uint32_t now_ms, uint32_t deadline_ms)
+{
+    return ((int32_t)(now_ms - deadline_ms)) >= 0;
+}
+
+static uint32_t percent_u32(uint32_t value, uint32_t total)
+{
+    if (total == 0u) {
+        return 0u;
+    }
+
+    return (uint32_t)(((uint64_t)value * 100u) / total);
+}
+
+static const char *chant_word(uint8_t step)
+{
+    static const char *const words[] = {
+        "Rock",
+        "Paper",
+        "Scissors"
+    };
+
+    if (step >= (sizeof(words) / sizeof(words[0]))) {
+        return "Scissors";
+    }
+
+    return words[step];
+}
+
+static const char *menu_action_name(GameMove move)
+{
+    switch (move) {
+    case GAME_MOVE_ROCK:
+        return "menu_up";
+    case GAME_MOVE_PAPER:
+        return "menu_reset";
+    case GAME_MOVE_SCISSORS:
+        return "menu_down";
+    default:
+        return "menu_unknown";
+    }
+}
+
+static void log_card_accepted(const GameUserId *id)
+{
+    xprintf("card accepted hash=0x%04X uid=", (unsigned int)uid_hash16(id));
+    print_user_id(id);
+    xprintf("\r\n");
+}
+
+static void log_card_ignored(AppState state, const GameUserId *id)
+{
+    xprintf("card ignored state=%s hash=0x%04X uid=",
+            state_name(state),
+            (unsigned int)uid_hash16(id));
+    print_user_id(id);
+    xprintf("\r\n");
+}
+
+static void log_button_accepted_action(const char *action)
+{
+    xprintf("button accepted action=%s\r\n", (action != NULL) ? action : "unknown");
+}
+
+static void log_button_accepted_move(GameMove move)
+{
+    xprintf("button accepted move=%s\r\n", move_name(move));
+}
+
+static void log_button_ignored(AppState state, GameMove move)
+{
+    if (!app_state_is_locked(state)) {
+        return;
+    }
+
+    xprintf("button ignored state=%s move=%s\r\n", state_name(state), move_name(move));
 }
 
 static void print_round_result(GameMove player_move, const GameRound *round)
@@ -450,25 +706,10 @@ static void print_round_result(GameMove player_move, const GameRound *round)
         return;
     }
 
-    xprintf("you=%s mcu=%s result=%s\r\n",
+    xprintf("round you=%s bot=%s result=%s\r\n",
             move_name(player_move),
             move_name(round->device_move),
             result_name(round->result));
-}
-
-static void print_user_stats(const GameUser *user)
-{
-    if (user == NULL) {
-        return;
-    }
-
-    xprintf("stats W/D/L: %lu/%lu/%lu rounds=%lu sessions=%lu dirty=%u\r\n",
-            (unsigned long)user->stats.wins,
-            (unsigned long)user->stats.draws,
-            (unsigned long)user->stats.losses,
-            (unsigned long)user->stats.rounds,
-            (unsigned long)user->sessions_played,
-            user->dirty ? 1u : 0u);
 }
 
 void trap_handler(void)
@@ -560,13 +801,11 @@ static bool read_rfid_card_once(GameUserId *id)
     }
 
     if (!PICC_ReadCardSerial(&mfrc522)) {
-        HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
         return false;
     }
 
     copy_rfid_uid_to_user_id(&mfrc522.uid, id);
     (void)PICC_HaltA(&mfrc522);
-    HAL_ProgramDelayMs(RFID_POLL_DELAY_MS);
 
     return id->length > 0u;
 }
@@ -611,17 +850,15 @@ static bool same_user_id(const GameUserId *left, const GameUserId *right)
     return true;
 }
 
-static void print_help(void)
-{
-    xprintf("\r\nRock Paper Scissors\r\n");
-    xprintf("same RFID card = save and menu\r\n");
-    xprintf("another RFID card = save and switch user\r\n");
-    xprintf("buttons GPIO1_8/GPIO1_9/GPIO1_2 = rock/paper/scissors\r\n");
-}
-
 static void print_init_status(GameStatus status, const GameUser *user)
 {
-    xprintf("\r\ninit status=%s uid=", status_name(status));
+    if (user == NULL) {
+        return;
+    }
+
+    xprintf("user init status=%s hash=0x%04X uid=",
+            status_name(status),
+            (unsigned int)uid_hash16(&user->id));
     print_user_id(&user->id);
     xprintf(" loaded=%u sessions=%lu rounds=%lu\r\n",
             user->loaded_from_storage ? 1u : 0u,
@@ -631,12 +868,16 @@ static void print_init_status(GameStatus status, const GameUser *user)
 
 static void print_save_status(GameStatus status, const GameUser *user)
 {
+    if (user == NULL) {
+        return;
+    }
+
     if ((status == GAME_STATUS_CRC_ERROR) && !user->dirty) {
-        xprintf("save status=ok warning=crc_reused uid=");
+        xprintf("save status=ok warning=crc_reused hash=0x%04X uid=", (unsigned int)uid_hash16(&user->id));
     } else if ((status == GAME_STATUS_STORAGE_FULL) && !user->dirty) {
-        xprintf("save status=ok warning=evicted_old_user uid=");
+        xprintf("save status=ok warning=evicted_old_user hash=0x%04X uid=", (unsigned int)uid_hash16(&user->id));
     } else {
-        xprintf("save status=%s uid=", status_name(status));
+        xprintf("save status=%s hash=0x%04X uid=", status_name(status), (unsigned int)uid_hash16(&user->id));
     }
     print_user_id(&user->id);
     xprintf(" sessions=%lu dirty=%u\r\n",
@@ -688,6 +929,28 @@ static const char *result_name(GameRoundResult result)
     }
 
     return names[(uint8_t)result];
+}
+
+static const char *state_name(AppState state)
+{
+    switch (state) {
+    case APP_STATE_SPLASH:
+        return "splash";
+    case APP_STATE_MENU:
+        return "menu";
+    case APP_STATE_WELCOME:
+        return "welcome";
+    case APP_STATE_WAIT_MOVE:
+        return "wait_move";
+    case APP_STATE_CHANT:
+        return "chant";
+    case APP_STATE_DUEL:
+        return "duel";
+    case APP_STATE_RESULT:
+        return "result";
+    default:
+        return "unknown";
+    }
 }
 
 static const char *status_name(GameStatus status)
