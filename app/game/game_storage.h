@@ -6,5 +6,6 @@
 GameStatus game_storage_init(void);
 GameStatus game_storage_load_user(const GameUserId *id, GameUser *user);
 GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_store);
+GameStatus game_storage_list_users(GameUser *users, uint8_t capacity, uint8_t *count);
 
 #endif

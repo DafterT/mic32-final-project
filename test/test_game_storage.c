@@ -174,6 +174,167 @@ void test_game_storage_save_then_load_restores_user_stats_history_and_sessions(v
     assert_loaded_user_matches(&saved, &loaded, 3u);
 }
 
+/** Список пользователей пустой EEPROM возвращает без ошибок. */
+void test_game_storage_list_users_returns_empty_list_when_eeprom_is_empty(void)
+{
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0xAAu;
+    GameStatus status;
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, status);
+    TEST_ASSERT_EQUAL_UINT8(0u, count);
+}
+
+/** Список пользователей возвращает сохранённого пользователя со статистикой и сессиями. */
+void test_game_storage_list_users_returns_saved_user_stats_history_and_sessions(void)
+{
+    GameUser saved = arrange_saved_user(30u, 5u, 21u);
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, status);
+    TEST_ASSERT_EQUAL_UINT8(1u, count);
+    assert_loaded_user_matches(&saved, &users[0], 5u);
+}
+
+/** Список пользователей возвращает все валидные записи в порядке слотов. */
+void test_game_storage_list_users_returns_multiple_valid_users(void)
+{
+    GameUser first = arrange_saved_user(31u, 2u, 10u);
+    GameUser second = arrange_saved_user(32u, 3u, 11u);
+    GameUser third = arrange_saved_user(33u, 4u, 12u);
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, status);
+    TEST_ASSERT_EQUAL_UINT8(3u, count);
+    assert_loaded_user_matches(&first, &users[0], 2u);
+    assert_loaded_user_matches(&second, &users[1], 3u);
+    assert_loaded_user_matches(&third, &users[2], 4u);
+}
+
+/** Список пользователей пропускает записи с неизвестным заголовком. */
+void test_game_storage_list_users_skips_records_with_bad_magic_version_and_size(void)
+{
+    GameUser valid;
+    GameStorageRecord record;
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    arrange_saved_user(34u, 1u, 10u);
+    arrange_saved_user(35u, 2u, 11u);
+    arrange_saved_user(36u, 3u, 12u);
+    valid = arrange_saved_user(37u, 4u, 13u);
+
+    fake_game_storage_backend_fetch_record(0u, &record);
+    record.magic = 0u;
+    fake_game_storage_backend_store_record(0u, &record);
+
+    fake_game_storage_backend_fetch_record(1u, &record);
+    record.version = 0u;
+    fake_game_storage_backend_store_record(1u, &record);
+
+    fake_game_storage_backend_fetch_record(2u, &record);
+    record.size = 0u;
+    fake_game_storage_backend_store_record(2u, &record);
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, status);
+    TEST_ASSERT_EQUAL_UINT8(1u, count);
+    assert_loaded_user_matches(&valid, &users[0], 4u);
+}
+
+/** Список пользователей пропускает запись с битым CRC и не стирает слот. */
+void test_game_storage_list_users_skips_corrupt_crc_without_erasing_slot(void)
+{
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    arrange_saved_user(38u, 3u, 18u);
+    fake_game_storage_backend_corrupt_byte(0u, (uint8_t)offsetof(GameStorageRecord, stats_rounds), 0x01u);
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, status);
+    TEST_ASSERT_EQUAL_UINT8(0u, count);
+    TEST_ASSERT_FALSE(fake_game_storage_backend_slot_is_erased(0u));
+}
+
+/** Список пользователей заполняет только capacity записей и возвращает успех. */
+void test_game_storage_list_users_truncates_to_capacity(void)
+{
+    GameUser first = arrange_saved_user(39u, 2u, 10u);
+    GameUser second = arrange_saved_user(40u, 3u, 11u);
+    GameUser users[1];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    status = game_storage_list_users(users, 1u, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, status);
+    TEST_ASSERT_EQUAL_UINT8(1u, count);
+    assert_loaded_user_matches(&first, &users[0], 2u);
+    TEST_ASSERT_EQUAL_UINT8(2u, fake_game_storage_backend_count_written_slots());
+    (void)second;
+}
+
+/** Список пользователей отвергает недопустимые аргументы. */
+void test_game_storage_list_users_rejects_invalid_arguments(void)
+{
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus null_users_status;
+    GameStatus null_count_status;
+    GameStatus zero_capacity_status;
+
+    null_users_status = game_storage_list_users(NULL, GAME_EEPROM_SLOT_COUNT, &count);
+    null_count_status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, NULL);
+    zero_capacity_status = game_storage_list_users(users, 0u, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_INVALID_ARG, null_users_status);
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_INVALID_ARG, null_count_status);
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_INVALID_ARG, zero_capacity_status);
+}
+
+/** Список пользователей возвращает ошибку инициализации бэкенда. */
+void test_game_storage_list_users_returns_storage_error_when_backend_init_fails(void)
+{
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    fake_game_storage_backend_set_init_status(GAME_STATUS_STORAGE_ERROR);
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_STORAGE_ERROR, status);
+}
+
+/** Список пользователей возвращает ошибку чтения бэкенда. */
+void test_game_storage_list_users_returns_storage_error_when_backend_read_fails(void)
+{
+    GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    GameStatus status;
+
+    fake_game_storage_backend_set_read_status(GAME_STATUS_STORAGE_ERROR);
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_STORAGE_ERROR, status);
+}
+
 /** Повторное сохранение того же UID обновляет существующий слот. */
 void test_game_storage_save_same_uid_twice_updates_existing_slot(void)
 {

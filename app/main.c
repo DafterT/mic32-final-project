@@ -1,5 +1,7 @@
 #include "buttons.h"
 #include "game.h"
+#include "game_storage.h"
+#include "game_storage_format.h"
 #include "mik32_hal.h"
 #include "mik32_hal_i2c.h"
 #include "mik32_hal_irq.h"
@@ -49,6 +51,7 @@ static bool app_save_active_user(AppContext *context);
 static void app_enter_menu(AppContext *context);
 static void app_enter_game(AppContext *context);
 static void app_handle_move(AppContext *context, GameMove player_move);
+static void print_storage_users_table(void);
 static void print_round_result(GameMove player_move, const GameRound *round);
 static void print_user_stats(const GameUser *user);
 static void SystemClock_Config(void);
@@ -111,6 +114,7 @@ int main(void)
     PCD_Init(&mfrc522);
 
     xprintf("\r\nRFID button game\r\n");
+    print_storage_users_table();
 
     while (1) {
         GameMove player_move;
@@ -252,6 +256,44 @@ static void app_handle_move(AppContext *context, GameMove player_move)
     round = game_stage(&context->user, player_move);
     print_round_result(player_move, &round);
     print_user_stats(&context->user);
+}
+
+static void print_storage_users_table(void)
+{
+    static GameUser users[GAME_EEPROM_SLOT_COUNT];
+    uint8_t count = 0u;
+    uint8_t index;
+    GameStatus status;
+
+    status = game_storage_list_users(users, GAME_EEPROM_SLOT_COUNT, &count);
+    xprintf("storage users status=%s count=%u\r\n", status_name(status), count);
+    if (status != GAME_STATUS_OK) {
+        return;
+    }
+
+    xprintf("idx uid rounds wins draws losses win_pct draw_pct sessions\r\n");
+    for (index = 0u; index < count; ++index) {
+        const GameUser *user = &users[index];
+        uint32_t rounds = user->stats.rounds;
+        uint32_t win_pct = 0u;
+        uint32_t draw_pct = 0u;
+
+        if (rounds != 0u) {
+            win_pct = (uint32_t)(((uint64_t)user->stats.wins * 100u) / rounds);
+            draw_pct = (uint32_t)(((uint64_t)user->stats.draws * 100u) / rounds);
+        }
+
+        xprintf("%u ", (unsigned int)(index + 1u));
+        print_user_id(&user->id);
+        xprintf(" %lu %lu %lu %lu %lu %lu %lu\r\n",
+                (unsigned long)rounds,
+                (unsigned long)user->stats.wins,
+                (unsigned long)user->stats.draws,
+                (unsigned long)user->stats.losses,
+                (unsigned long)win_pct,
+                (unsigned long)draw_pct,
+                (unsigned long)user->sessions_played);
+    }
 }
 
 static void print_round_result(GameMove player_move, const GameRound *round)

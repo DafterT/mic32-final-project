@@ -157,6 +157,43 @@ GameStatus game_storage_save_user(const GameUser *user, uint32_t sessions_to_sto
     return save_status;
 }
 
+GameStatus game_storage_list_users(GameUser *users, uint8_t capacity, uint8_t *count)
+{
+    uint8_t slot_index;
+    GameStatus status;
+
+    if ((users == NULL) || (count == NULL) || (capacity == 0u)) {
+        return GAME_STATUS_INVALID_ARG;
+    }
+
+    *count = 0u;
+
+    status = game_storage_init();
+    if (status != GAME_STATUS_OK) {
+        return status;
+    }
+
+    for (slot_index = 0u; slot_index < GAME_EEPROM_SLOT_COUNT; ++slot_index) {
+        GameStorageRecord record;
+
+        status = game_storage_backend_read_record(slot_index, &record);
+        if (status != GAME_STATUS_OK) {
+            return status;
+        }
+
+        if (storage_record_state(&record) != STORAGE_SLOT_VALID) {
+            continue;
+        }
+
+        if (*count < capacity) {
+            storage_record_to_user(&record, &users[*count]);
+            *count += 1u;
+        }
+    }
+
+    return GAME_STATUS_OK;
+}
+
 static bool storage_record_is_empty(const GameStorageRecord *record)
 {
     const uint8_t *bytes = (const uint8_t *)record;
