@@ -33,6 +33,7 @@ static void game_lcd_format_start(char *buffer, size_t *position);
 static void game_lcd_append_char(char *buffer, size_t *position, char value);
 static void game_lcd_append_string(char *buffer, size_t *position, const char *text);
 static void game_lcd_append_uint32(char *buffer, size_t *position, uint32_t value);
+static void game_lcd_append_uint32_min_width(char *buffer, size_t *position, uint32_t value, uint8_t min_width);
 static void game_lcd_append_hex4(char *buffer, size_t *position, uint16_t value);
 
 void game_lcd_clear(void)
@@ -253,12 +254,12 @@ static void game_lcd_format_menu_title(char *buffer, uint16_t hash, uint32_t rou
         game_lcd_append_string(buffer, &position, ">999");
     } else {
         game_lcd_append_char(buffer, &position, ':');
-        game_lcd_append_uint32(buffer, &position, rounds);
+        game_lcd_append_uint32_min_width(buffer, &position, rounds, 3u);
     }
     game_lcd_append_char(buffer, &position, ' ');
-    game_lcd_append_uint32(buffer, &position, (uint32_t)index + 1u);
+    game_lcd_append_uint32_min_width(buffer, &position, (uint32_t)index + 1u, 2u);
     game_lcd_append_char(buffer, &position, '/');
-    game_lcd_append_uint32(buffer, &position, count);
+    game_lcd_append_uint32_min_width(buffer, &position, count, 2u);
 }
 
 static void game_lcd_format_welcome(char *buffer, uint16_t hash)
@@ -319,10 +320,14 @@ static void game_lcd_format_stats(char *buffer, const GameStats *stats)
 
 static void game_lcd_format_percent_stats(char *buffer, const GameStats *stats)
 {
+    char stats_text[GAME_LCD_FORMAT_BUFFER_SIZE];
     uint32_t win_pct = 0u;
     uint32_t draw_pct = 0u;
     uint32_t loss_pct = 0u;
+    uint8_t left_padding;
+    uint8_t text_length;
     size_t position;
+    size_t text_position;
 
     if (buffer == NULL) {
         return;
@@ -337,14 +342,24 @@ static void game_lcd_format_percent_stats(char *buffer, const GameStats *stats)
         }
     }
 
+    game_lcd_format_start(stats_text, &text_position);
+    game_lcd_append_char(stats_text, &text_position, 'W');
+    game_lcd_append_uint32_min_width(stats_text, &text_position, win_pct, 2u);
+    game_lcd_append_string(stats_text, &text_position, "% D");
+    game_lcd_append_uint32_min_width(stats_text, &text_position, draw_pct, 2u);
+    game_lcd_append_string(stats_text, &text_position, "% L");
+    game_lcd_append_uint32_min_width(stats_text, &text_position, loss_pct, 2u);
+    game_lcd_append_char(stats_text, &text_position, '%');
+
+    text_length = game_lcd_text_length_up_to(stats_text, GAME_LCD_COLS);
+    left_padding = (text_length < GAME_LCD_COLS) ? (uint8_t)((GAME_LCD_COLS - text_length) / 2u) : 0u;
+
     game_lcd_format_start(buffer, &position);
-    game_lcd_append_char(buffer, &position, 'W');
-    game_lcd_append_uint32(buffer, &position, win_pct);
-    game_lcd_append_string(buffer, &position, "% D");
-    game_lcd_append_uint32(buffer, &position, draw_pct);
-    game_lcd_append_string(buffer, &position, "% L");
-    game_lcd_append_uint32(buffer, &position, loss_pct);
-    game_lcd_append_char(buffer, &position, '%');
+    while (left_padding != 0u) {
+        game_lcd_append_char(buffer, &position, ' ');
+        --left_padding;
+    }
+    game_lcd_append_string(buffer, &position, stats_text);
 }
 
 static uint32_t game_lcd_percent(uint32_t value, uint32_t total)
@@ -419,6 +434,24 @@ static void game_lcd_append_uint32(char *buffer, size_t *position, uint32_t valu
         --length;
         game_lcd_append_char(buffer, position, digits[length]);
     }
+}
+
+static void game_lcd_append_uint32_min_width(char *buffer, size_t *position, uint32_t value, uint8_t min_width)
+{
+    uint32_t remaining = value;
+    uint8_t digit_count = 1u;
+
+    while (remaining >= 10u) {
+        remaining /= 10u;
+        ++digit_count;
+    }
+
+    while (digit_count < min_width) {
+        game_lcd_append_char(buffer, position, '0');
+        ++digit_count;
+    }
+
+    game_lcd_append_uint32(buffer, position, value);
 }
 
 static void game_lcd_append_hex4(char *buffer, size_t *position, uint16_t value)
