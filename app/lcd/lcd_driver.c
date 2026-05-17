@@ -15,6 +15,19 @@ extern I2C_HandleTypeDef hi2c;  // change your handler here accordingly
 #define LCD_CGRAM_ADDRESS 0x40
 #define LCD_DATA_BATCH_MAX_CHARS 16u
 
+static void lcd_send_raw_cmd_nibble(uint8_t nibble)
+{
+	uint8_t data_t[2];
+	uint8_t data_u = (uint8_t)(nibble & 0xf0u);
+
+	data_t[0] = data_u | 0x0Cu;
+	data_t[1] = data_u | 0x08u;
+
+	if(HAL_OK != HAL_I2C_Master_Transmit (&hi2c, SLAVE_ADDRESS_LCD, data_t, 2, I2C_TIMEOUT_DEFAULT)) {
+		xprintf("No Cmd sent\r\n");
+	}
+}
+
 static void send_raw_data(const char* str)
 {
 	while (*str) lcd_send_data (*str++);
@@ -118,13 +131,13 @@ void lcd_init (void)
 {
 	// 4 bit initialisation
 	HAL_DelayMs(50);  // wait for >40ms
-	lcd_send_cmd (0x30);
+	lcd_send_raw_cmd_nibble(0x30u);
 	HAL_DelayMs(5);  // wait for >4.1ms
-	lcd_send_cmd (0x30);
+	lcd_send_raw_cmd_nibble(0x30u);
 	HAL_DelayMs(1);  // wait for >100us
-	lcd_send_cmd (0x30);
+	lcd_send_raw_cmd_nibble(0x30u);
 	HAL_DelayMs(10);
-	lcd_send_cmd (0x20);  // 4bit mode
+	lcd_send_raw_cmd_nibble(0x20u);  // 4bit mode
 	HAL_DelayMs(10);
 
   // dislay initialisation
