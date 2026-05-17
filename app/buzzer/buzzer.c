@@ -10,6 +10,7 @@
 #define BUZZER_TIMER_INPUT_HZ 32000000u
 #define BUZZER_INITIAL_TOP    61185u
 
+#define NOTE_F5  698u
 #define NOTE_C7  2093u
 #define NOTE_C5  523u
 #define NOTE_D5  587u
@@ -85,10 +86,28 @@ static const BuzzerNote menu_back_melody[] = {
 };
 
 static const BuzzerNote chant_melody[] = {
-    {NOTE_C5, 130u, 160u},
-    {NOTE_D5, 130u, 160u},
-    {NOTE_D5, 130u, 160u},
-    {NOTE_E5, 130u, 160u},
+    MELODY_NOTE(NOTE_C5, 16),
+    MELODY_NOTE(NOTE_D5, 16),
+    MELODY_NOTE(NOTE_C5, 16),
+    MELODY_NOTE(NOTE_D5, 16),
+
+    MELODY_NOTE(NOTE_E5, 16),
+    MELODY_NOTE(NOTE_F5, 16),
+    MELODY_NOTE(NOTE_E5, 16),
+    MELODY_NOTE(NOTE_F5, 16),
+
+    MELODY_REST(32),
+
+    MELODY_NOTE(NOTE_G5, 16),
+    MELODY_NOTE(NOTE_A5, 16),
+    MELODY_NOTE(NOTE_G5, 16),
+    MELODY_NOTE(NOTE_A5, 16),
+
+    MELODY_REST(32),
+
+    MELODY_NOTE(NOTE_C6, 8),
+    MELODY_NOTE(NOTE_D6, 8),
+    MELODY_NOTE(NOTE_G5, 4)
 };
 
 static const BuzzerNote lose_melody[] = {
