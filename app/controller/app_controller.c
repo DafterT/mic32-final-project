@@ -27,6 +27,7 @@ static void app_clamp_menu_index(AppController *controller);
 static bool app_state_accepts_rfid(AppControllerState state);
 static bool app_state_accepts_buttons(AppControllerState state);
 static bool app_state_is_locked(AppControllerState state);
+static bool app_move_is_valid(GameMove move);
 static bool time_reached(uint32_t now_ms, uint32_t deadline_ms);
 static uint32_t percent_u32(uint32_t value, uint32_t total);
 static const char *chant_word(uint8_t step);
@@ -141,6 +142,15 @@ void app_controller_handle_button(AppController *controller, GameMove move, uint
     AppLogData log = {0};
 
     if (controller == NULL) {
+        return;
+    }
+
+    if (!app_move_is_valid(move)) {
+        if (app_state_is_locked(controller->state)) {
+            log.state = controller->state;
+            log.move = move;
+            log_event(controller, APP_LOG_BUTTON_IGNORED, &log);
+        }
         return;
     }
 
@@ -262,7 +272,7 @@ const char *app_controller_move_name(GameMove move)
         "scissors"
     };
 
-    if ((uint8_t)move >= APP_MOVE_COUNT) {
+    if (!app_move_is_valid(move)) {
         return "unknown";
     }
 
@@ -515,6 +525,8 @@ static bool app_activate_user(AppController *controller, const GameUserId *card_
         return false;
     }
 
+    controller->user_active = false;
+    memset(&controller->user, 0, sizeof(controller->user));
     status = init_user(controller, card_id, &controller->user);
 
     log.status = status;
@@ -668,6 +680,11 @@ static bool app_state_accepts_buttons(AppControllerState state)
 static bool app_state_is_locked(AppControllerState state)
 {
     return !app_state_accepts_rfid(state) && !app_state_accepts_buttons(state);
+}
+
+static bool app_move_is_valid(GameMove move)
+{
+    return (uint8_t)move < APP_MOVE_COUNT;
 }
 
 static bool time_reached(uint32_t now_ms, uint32_t deadline_ms)
