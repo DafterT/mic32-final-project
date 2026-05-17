@@ -13,6 +13,7 @@ extern I2C_HandleTypeDef hi2c;  // change your handler here accordingly
 #define RADIX_DEC 10
 #define ROUND_MULTIP 100
 #define LCD_CGRAM_ADDRESS 0x40
+#define LCD_DATA_BATCH_MAX_CHARS 16u
 
 static void send_raw_data(const char* str)
 {
@@ -48,6 +49,43 @@ void lcd_send_data (char data)
 	
 	if(HAL_OK != HAL_I2C_Master_Transmit (&hi2c, SLAVE_ADDRESS_LCD, data_t, 4, I2C_TIMEOUT_DEFAULT)) {
 		xprintf("No Data sent\r\n");
+	}
+}
+
+void lcd_send_data_buffer(const char *data, uint8_t length)
+{
+	uint8_t offset = 0u;
+
+	if ((data == NULL) || (length == 0u)) {
+		return;
+	}
+
+	while (offset < length) {
+		uint8_t chunk = (uint8_t)(length - offset);
+		uint8_t data_t[LCD_DATA_BATCH_MAX_CHARS * 4u];
+		uint8_t index;
+
+		if (chunk > LCD_DATA_BATCH_MAX_CHARS) {
+			chunk = LCD_DATA_BATCH_MAX_CHARS;
+		}
+
+		for (index = 0u; index < chunk; ++index) {
+			uint8_t value = (uint8_t)data[offset + index];
+			uint8_t data_u = (uint8_t)(value & 0xf0u);
+			uint8_t data_l = (uint8_t)((value << 4u) & 0xf0u);
+			uint8_t out = (uint8_t)(index * 4u);
+
+			data_t[out] = data_u | 0x0Du;
+			data_t[out + 1u] = data_u | 0x09u;
+			data_t[out + 2u] = data_l | 0x0Du;
+			data_t[out + 3u] = data_l | 0x09u;
+		}
+
+		if(HAL_OK != HAL_I2C_Master_Transmit (&hi2c, SLAVE_ADDRESS_LCD, data_t, (uint16_t)(chunk * 4u), I2C_TIMEOUT_DEFAULT)) {
+			xprintf("No Data sent\r\n");
+		}
+
+		offset = (uint8_t)(offset + chunk);
 	}
 }
 

@@ -9,6 +9,8 @@ add_executable(${APP_NAME}
     game/game_storage.c
     game/game_storage_eeprom.c
     math/uid_hash.c
+    lcd/game_lcd_bitmaps.c
+    lcd/game_lcd_ui.c
     lcd/lcd_driver.c
     neural_network/model_weights.c
     neural_network/quant_model.c

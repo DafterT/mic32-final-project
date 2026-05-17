@@ -1,5 +1,6 @@
 #include "buttons.h"
 #include "game.h"
+#include "game_lcd_ui.h"
 #include "game_storage.h"
 #include "game_storage_format.h"
 #include "mik32_hal.h"
@@ -52,6 +53,8 @@ static bool app_save_active_user(AppContext *context);
 static void app_enter_menu(AppContext *context);
 static void app_enter_game(AppContext *context);
 static void app_handle_move(AppContext *context, GameMove player_move);
+static void app_run_lcd_ui_demo(void);
+static void app_wait_lcd_ui_demo_rock(const char *step_name);
 static void print_storage_users_table(void);
 static void print_round_result(GameMove player_move, const GameRound *round);
 static void print_user_stats(const GameUser *user);
@@ -116,6 +119,7 @@ int main(void)
 
     xprintf("\r\nRFID button game\r\n");
     print_storage_users_table();
+    app_run_lcd_ui_demo();
 
     while (1) {
         GameMove player_move;
@@ -257,6 +261,149 @@ static void app_handle_move(AppContext *context, GameMove player_move)
     round = game_stage(&context->user, player_move);
     print_round_result(player_move, &round);
     print_user_stats(&context->user);
+}
+
+static void app_run_lcd_ui_demo(void)
+{
+    GameUser user_zero = {
+        .id = {
+            .bytes = {0x10u, 0x20u, 0x30u, 0x40u},
+            .length = 4u,
+        },
+        .stats = {
+            .rounds = 0u,
+            .wins = 0u,
+            .draws = 0u,
+            .losses = 0u,
+        },
+    };
+    GameUser user_balanced = {
+        .id = {
+            .bytes = {0xDEu, 0xADu, 0xBEu, 0xEFu},
+            .length = 4u,
+        },
+        .stats = {
+            .rounds = 123u,
+            .wins = 55u,
+            .draws = 13u,
+            .losses = 55u,
+        },
+    };
+    GameUser user_large = {
+        .id = {
+            .bytes = {0x01u, 0x23u, 0x45u, 0x67u, 0x89u},
+            .length = 5u,
+        },
+        .stats = {
+            .rounds = 1000u,
+            .wins = 450u,
+            .draws = 100u,
+            .losses = 450u,
+        },
+    };
+    GameUser user_long_stats = {
+        .id = {
+            .bytes = {0xAAu, 0xBBu, 0xCCu, 0xDDu, 0xEEu, 0xFFu},
+            .length = 6u,
+        },
+        .stats = {
+            .rounds = 131347u,
+            .wins = 123456u,
+            .draws = 7890u,
+            .losses = 1u,
+        },
+    };
+    uint8_t demo_player_move;
+    uint8_t demo_bot_move;
+
+    xprintf("\r\nlcd ui demo: press rock for next screen\r\n");
+    buttons_reset();
+
+    game_lcd_clear();
+    game_lcd_write_line(0u, "LCD UI demo");
+    game_lcd_write_line(1u, "Rock=next");
+    app_wait_lcd_ui_demo_rock("write_line after clear");
+
+    game_lcd_center_line(0u, "Centered");
+    game_lcd_write_line(1u, "short");
+    app_wait_lcd_ui_demo_rock("center then short line");
+
+    game_lcd_write_line(0u, "1234567890123456");
+    game_lcd_center_line(1u, "Win");
+    app_wait_lcd_ui_demo_rock("full width and centered");
+
+    game_lcd_show_splash();
+    app_wait_lcd_ui_demo_rock("splash");
+
+    game_lcd_show_chant("Rock");
+    app_wait_lcd_ui_demo_rock("chant rock");
+
+    game_lcd_show_menu_user(&user_zero, 0u, 3u);
+    app_wait_lcd_ui_demo_rock("menu zero stats");
+
+    game_lcd_show_menu_empty();
+    app_wait_lcd_ui_demo_rock("empty menu");
+
+    game_lcd_show_welcome(&user_balanced);
+    app_wait_lcd_ui_demo_rock("welcome balanced");
+
+    game_lcd_show_chant("Paper");
+    app_wait_lcd_ui_demo_rock("chant paper");
+
+    game_lcd_show_wait_move(&user_balanced);
+    app_wait_lcd_ui_demo_rock("wait move");
+
+    for (demo_player_move = 0u; demo_player_move < MOVE_COUNT; ++demo_player_move) {
+        for (demo_bot_move = 0u; demo_bot_move < MOVE_COUNT; ++demo_bot_move) {
+            game_lcd_show_duel((GameMove)demo_player_move, (GameMove)demo_bot_move);
+            xprintf("lcd ui demo duel you=%s bot=%s\r\n",
+                    move_name((GameMove)demo_player_move),
+                    move_name((GameMove)demo_bot_move));
+            app_wait_lcd_ui_demo_rock("duel");
+        }
+    }
+
+    game_lcd_show_result(GAME_ROUND_PLAYER_WIN, &user_balanced);
+    app_wait_lcd_ui_demo_rock("result win");
+
+    game_lcd_show_menu_user(&user_large, 10u, 12u);
+    app_wait_lcd_ui_demo_rock("menu large matches");
+
+    game_lcd_show_result(GAME_ROUND_DRAW, &user_large);
+    app_wait_lcd_ui_demo_rock("result draw");
+
+    game_lcd_show_chant("Scissors");
+    app_wait_lcd_ui_demo_rock("chant scissors");
+
+    game_lcd_show_result(GAME_ROUND_PLAYER_LOSS, &user_long_stats);
+    app_wait_lcd_ui_demo_rock("result long stats");
+
+    game_lcd_write_line(0u, "Tail clear test");
+    game_lcd_write_line(1u, "tiny");
+    app_wait_lcd_ui_demo_rock("tail clear");
+
+    game_lcd_show_menu_empty();
+    buttons_reset();
+    xprintf("lcd ui demo: complete\r\n");
+}
+
+static void app_wait_lcd_ui_demo_rock(const char *step_name)
+{
+    GameMove move;
+
+    xprintf("lcd ui demo step=%s\r\n", (step_name != NULL) ? step_name : "unknown");
+
+    while (true) {
+        if (buttons_poll_move(HAL_Millis(), &move)) {
+            if (move == GAME_MOVE_ROCK) {
+                return;
+            }
+
+            xprintf("lcd ui demo ignored move=%s; press rock\r\n", move_name(move));
+        }
+
+        HAL_ProgramDelayMs(1u);
+    }
 }
 
 static void print_storage_users_table(void)
