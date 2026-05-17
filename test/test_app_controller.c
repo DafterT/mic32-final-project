@@ -12,6 +12,7 @@
 #define TEST_TIMING_RESULT_MS     5u
 #define MAX_UI_CALLS              64u
 #define MAX_LOG_CALLS             64u
+#define MAX_SOUND_CALLS           32u
 
 typedef enum {
     UI_SPLASH = 0u,
@@ -42,6 +43,11 @@ typedef struct {
     GameUser user;
 } LogCall;
 
+typedef struct {
+    AppSound sound;
+    uint32_t now_ms;
+} SoundCall;
+
 static AppController controller;
 static AppControllerPorts ports;
 static AppControllerTiming timing;
@@ -49,6 +55,8 @@ static UiCall ui_calls[MAX_UI_CALLS];
 static uint8_t ui_call_count;
 static LogCall log_calls[MAX_LOG_CALLS];
 static uint8_t log_call_count;
+static SoundCall sound_calls[MAX_SOUND_CALLS];
+static uint8_t sound_call_count;
 static GameUser listed_users[GAME_EEPROM_SLOT_COUNT];
 static uint8_t listed_user_count;
 static GameStatus list_status;
@@ -81,20 +89,24 @@ static void show_wait_move_callback(const GameUser *user);
 static void show_chant_callback(const char *word);
 static void show_duel_callback(GameMove player_move, GameMove bot_move);
 static void show_result_callback(GameRoundResult result, const GameUser *user);
+static void play_sound_callback(AppSound sound, uint32_t now_ms);
 static void log_callback(AppLogEvent event, const AppLogData *data);
 static void record_ui(UiEvent event);
+static const SoundCall *last_sound_call(void);
 
 void setUp(void)
 {
     memset(&controller, 0, sizeof(controller));
     memset(ui_calls, 0, sizeof(ui_calls));
     memset(log_calls, 0, sizeof(log_calls));
+    memset(sound_calls, 0, sizeof(sound_calls));
     memset(listed_users, 0, sizeof(listed_users));
     memset(&init_user_result, 0, sizeof(init_user_result));
     memset(&last_init_id, 0, sizeof(last_init_id));
 
     ui_call_count = 0u;
     log_call_count = 0u;
+    sound_call_count = 0u;
     listed_user_count = 0u;
     list_status = GAME_STATUS_OK;
     list_calls = 0u;
@@ -125,6 +137,7 @@ void setUp(void)
     ports.show_chant = show_chant_callback;
     ports.show_duel = show_duel_callback;
     ports.show_result = show_result_callback;
+    ports.play_sound = play_sound_callback;
     ports.log = log_callback;
 }
 
@@ -156,6 +169,24 @@ void test_app_controller_starts_with_splash_and_opens_empty_menu_after_timeout(v
     TEST_ASSERT_EQUAL_UINT8(1u, list_calls);
     TEST_ASSERT_EQUAL_INT(UI_MENU_EMPTY, last_ui_call()->event);
     TEST_ASSERT_EQUAL_UINT8(0u, app_controller_menu_count(&controller));
+    TEST_ASSERT_EQUAL_UINT8(1u, sound_call_count);
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_INTRO, sound_calls[0u].sound);
+    TEST_ASSERT_EQUAL_UINT32(100u, sound_calls[0u].now_ms);
+}
+
+void test_app_controller_plays_menu_back_sound_for_accepted_card(void)
+{
+    GameUserId id = make_id(0x21u);
+
+    start_and_open_menu();
+    sound_call_count = 0u;
+    init_user_result = make_user(0x21u, 0u, 0u, 0u, 0u);
+
+    app_controller_handle_card(&controller, &id, 110u);
+
+    TEST_ASSERT_EQUAL_UINT8(1u, sound_call_count);
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_MENU_BACK, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(110u, last_sound_call()->now_ms);
 }
 
 void test_app_controller_sorts_menu_and_navigates_with_buttons(void)
@@ -231,6 +262,8 @@ void test_app_controller_runs_round_animation_and_returns_to_wait_move(void)
     TEST_ASSERT_EQUAL_INT(GAME_MOVE_ROCK, last_stage_move);
     TEST_ASSERT_EQUAL_INT(UI_CHANT, last_ui_call()->event);
     TEST_ASSERT_EQUAL_STRING("Rock", last_ui_call()->word);
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_CHANT, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(200u, last_sound_call()->now_ms);
 
     TEST_ASSERT_FALSE(app_controller_tick(&controller, 203u, &unlocked_from));
     TEST_ASSERT_EQUAL_STRING("Paper", last_ui_call()->word);
@@ -249,11 +282,43 @@ void test_app_controller_runs_round_animation_and_returns_to_wait_move(void)
     TEST_ASSERT_EQUAL_INT(UI_RESULT, last_ui_call()->event);
     TEST_ASSERT_EQUAL_INT(GAME_ROUND_PLAYER_WIN, last_ui_call()->result);
     TEST_ASSERT_EQUAL_UINT32(1u, last_ui_call()->user.stats.wins);
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_WIN, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(216u, last_sound_call()->now_ms);
 
     TEST_ASSERT_TRUE(app_controller_tick(&controller, 221u, &unlocked_from));
     TEST_ASSERT_EQUAL_INT(APP_CONTROLLER_STATE_RESULT, unlocked_from);
     TEST_ASSERT_EQUAL_INT(APP_CONTROLLER_STATE_WAIT_MOVE, app_controller_state(&controller));
     TEST_ASSERT_EQUAL_INT(UI_WAIT_MOVE, last_ui_call()->event);
+}
+
+void test_app_controller_plays_result_sounds_for_loss_and_draw(void)
+{
+    AppControllerState unlocked_from = APP_CONTROLLER_STATE_SPLASH;
+
+    activate_user_and_enter_wait(0x31u);
+    sound_call_count = 0u;
+    stage_result.result = GAME_ROUND_PLAYER_LOSS;
+
+    app_controller_handle_button(&controller, GAME_MOVE_SCISSORS, 200u);
+    app_controller_tick(&controller, 203u, &unlocked_from);
+    app_controller_tick(&controller, 206u, &unlocked_from);
+    app_controller_tick(&controller, 209u, &unlocked_from);
+    app_controller_tick(&controller, 216u, &unlocked_from);
+
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_LOSE, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(216u, last_sound_call()->now_ms);
+
+    TEST_ASSERT_TRUE(app_controller_tick(&controller, 221u, &unlocked_from));
+    stage_result.result = GAME_ROUND_DRAW;
+
+    app_controller_handle_button(&controller, GAME_MOVE_PAPER, 230u);
+    app_controller_tick(&controller, 233u, &unlocked_from);
+    app_controller_tick(&controller, 236u, &unlocked_from);
+    app_controller_tick(&controller, 239u, &unlocked_from);
+    app_controller_tick(&controller, 246u, &unlocked_from);
+
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_DRAW, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(246u, last_sound_call()->now_ms);
 }
 
 void test_app_controller_same_card_saves_and_returns_to_menu(void)
@@ -695,6 +760,12 @@ static const LogCall *last_log_call(void)
     return &log_calls[log_call_count - 1u];
 }
 
+static const SoundCall *last_sound_call(void)
+{
+    TEST_ASSERT_GREATER_THAN_UINT8(0u, sound_call_count);
+    return &sound_calls[sound_call_count - 1u];
+}
+
 static GameStatus list_users_callback(GameUser *users, uint8_t capacity, uint8_t *count)
 {
     uint8_t index;
@@ -821,6 +892,14 @@ static void show_result_callback(GameRoundResult result, const GameUser *user)
     if (user != NULL) {
         ui_calls[ui_call_count - 1u].user = *user;
     }
+}
+
+static void play_sound_callback(AppSound sound, uint32_t now_ms)
+{
+    TEST_ASSERT_LESS_THAN_UINT8(MAX_SOUND_CALLS, sound_call_count);
+    sound_calls[sound_call_count].sound = sound;
+    sound_calls[sound_call_count].now_ms = now_ms;
+    ++sound_call_count;
 }
 
 static void log_callback(AppLogEvent event, const AppLogData *data)

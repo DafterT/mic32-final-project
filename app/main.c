@@ -1,5 +1,6 @@
 #include "app_controller.h"
 #include "buttons.h"
+#include "buzzer.h"
 #include "game.h"
 #include "game_lcd_ui.h"
 #include "game_storage.h"
@@ -20,7 +21,7 @@
 
 #define UART_BAUDRATE 115200u
 
-#define APP_SPLASH_MS     4000u
+#define APP_SPLASH_MS     3000u
 #define APP_WELCOME_MS    2000u
 #define APP_CHANT_STEP_MS 400u
 #define APP_DUEL_MS       2000u
@@ -39,6 +40,7 @@ static void app_drain_unlocked_inputs(AppController *app,
                                       AppControllerState unlocked_from,
                                       uint32_t now_ms,
                                       uint32_t *next_rfid_poll_ms);
+static void app_play_sound(AppSound sound, uint32_t now_ms);
 static void print_round_result(GameMove player_move, const GameRound *round);
 static void print_init_status(GameStatus status, const GameUser *user);
 static void print_save_status(GameStatus status, const GameUser *user);
@@ -72,6 +74,7 @@ static const AppControllerPorts APP_PORTS = {
     .show_chant = game_lcd_show_chant,
     .show_duel = game_lcd_show_duel,
     .show_result = game_lcd_show_result,
+    .play_sound = app_play_sound,
     .log = app_log_event,
 };
 
@@ -107,6 +110,7 @@ int main(void)
     I2C1_Init();
     SPI0_Init();
     buttons_init();
+    buzzer_init();
 
     lcd_init();
 
@@ -119,6 +123,7 @@ int main(void)
         AppControllerState unlocked_from;
         uint32_t now = HAL_Millis();
 
+        buzzer_update(now);
         if (app_controller_tick(&app, now, &unlocked_from)) {
             app_drain_unlocked_inputs(&app, unlocked_from, now, &next_rfid_poll_ms);
         }
@@ -126,6 +131,11 @@ int main(void)
     }
 
     return 0;
+}
+
+static void app_play_sound(AppSound sound, uint32_t now_ms)
+{
+    buzzer_play(sound, now_ms);
 }
 
 static void app_poll_inputs(AppController *app, uint32_t now_ms, uint32_t *next_rfid_poll_ms)

@@ -25,6 +25,15 @@ typedef enum {
 } AppMenuAction;
 
 typedef enum {
+    APP_SOUND_INTRO = 0u,
+    APP_SOUND_MENU_BACK,
+    APP_SOUND_CHANT,
+    APP_SOUND_LOSE,
+    APP_SOUND_DRAW,
+    APP_SOUND_WIN
+} AppSound;
+
+typedef enum {
     APP_LOG_GAME_START = 0u,
     APP_LOG_MENU_LIST_STATUS,
     APP_LOG_CARD_ACCEPTED,
@@ -67,6 +76,7 @@ typedef void (*AppShowUserFn)(const GameUser *user);
 typedef void (*AppShowChantFn)(const char *word);
 typedef void (*AppShowDuelFn)(GameMove player_move, GameMove bot_move);
 typedef void (*AppShowResultFn)(GameRoundResult result, const GameUser *user);
+typedef void (*AppPlaySoundFn)(AppSound sound, uint32_t now_ms);
 typedef void (*AppLogFn)(AppLogEvent event, const AppLogData *data);
 
 typedef struct {
@@ -82,6 +92,7 @@ typedef struct {
     AppShowChantFn show_chant;
     AppShowDuelFn show_duel;
     AppShowResultFn show_result;
+    AppPlaySoundFn play_sound;
     AppLogFn log;
 } AppControllerPorts;
 

@@ -17,6 +17,7 @@ static void app_enter_result(AppController *controller, uint32_t now_ms);
 static void app_update_state(AppController *controller, uint32_t now_ms);
 static void app_handle_menu_button(AppController *controller, GameMove move);
 static void app_handle_game_button(AppController *controller, GameMove player_move, uint32_t now_ms);
+static void app_play_sound(const AppController *controller, AppSound sound, uint32_t now_ms);
 static bool app_activate_user(AppController *controller, const GameUserId *card_id, uint32_t now_ms);
 static bool app_save_active_user(AppController *controller);
 static void app_load_menu_users(AppController *controller);
@@ -100,6 +101,7 @@ void app_controller_handle_card(AppController *controller, const GameUserId *car
 
     log.card_id = card_id;
     log_event(controller, APP_LOG_CARD_ACCEPTED, &log);
+    app_play_sound(controller, APP_SOUND_MENU_BACK, now_ms);
 
     if (!controller->user_active) {
         (void)app_activate_user(controller, card_id, now_ms);
@@ -325,6 +327,7 @@ static void app_enter_splash(AppController *controller, uint32_t now_ms)
     if (controller->ports.show_splash != NULL) {
         controller->ports.show_splash();
     }
+    app_play_sound(controller, APP_SOUND_INTRO, now_ms);
 }
 
 static void app_enter_menu(AppController *controller)
@@ -377,6 +380,7 @@ static void app_enter_chant(AppController *controller, uint32_t now_ms)
     if (controller->ports.show_chant != NULL) {
         controller->ports.show_chant(chant_word(controller->chant_step));
     }
+    app_play_sound(controller, APP_SOUND_CHANT, now_ms);
 }
 
 static void app_enter_duel(AppController *controller, uint32_t now_ms)
@@ -402,6 +406,26 @@ static void app_enter_result(AppController *controller, uint32_t now_ms)
     controller->state_until_ms = now_ms + controller->timing.result_ms;
     if (controller->ports.show_result != NULL) {
         controller->ports.show_result(controller->last_round.result, &controller->user);
+    }
+    switch (controller->last_round.result) {
+    case GAME_ROUND_PLAYER_LOSS:
+        app_play_sound(controller, APP_SOUND_LOSE, now_ms);
+        break;
+    case GAME_ROUND_DRAW:
+        app_play_sound(controller, APP_SOUND_DRAW, now_ms);
+        break;
+    case GAME_ROUND_PLAYER_WIN:
+        app_play_sound(controller, APP_SOUND_WIN, now_ms);
+        break;
+    default:
+        break;
+    }
+}
+
+static void app_play_sound(const AppController *controller, AppSound sound, uint32_t now_ms)
+{
+    if ((controller != NULL) && (controller->ports.play_sound != NULL)) {
+        controller->ports.play_sound(sound, now_ms);
     }
 }
 
