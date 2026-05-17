@@ -6,6 +6,7 @@ TEST_SOURCE_FILE("support/fake_game_storage_backend.c")
 
 #include "game_storage.h"
 #include "game_storage_format.h"
+#include "uid_hash.h"
 
 #include <stddef.h>
 
@@ -172,6 +173,20 @@ void test_game_storage_save_then_load_restores_user_stats_history_and_sessions(v
     TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, save_status);
     TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, load_status);
     assert_loaded_user_matches(&saved, &loaded, 3u);
+}
+
+/** Сохранение записывает общий hash32 UID в формат EEPROM. */
+void test_game_storage_save_writes_uid_hash32_to_record(void)
+{
+    GameUser saved = make_user(70u, 12u, 3u);
+    GameStorageRecord record;
+    GameStatus save_status;
+
+    save_status = game_storage_save_user(&saved, 3u);
+    fake_game_storage_backend_fetch_record(0u, &record);
+
+    TEST_ASSERT_EQUAL_INT(GAME_STATUS_OK, save_status);
+    TEST_ASSERT_EQUAL_HEX32(uid_hash32(&saved.id), record.uid_hash);
 }
 
 /** Список пользователей пустой EEPROM возвращает без ошибок. */

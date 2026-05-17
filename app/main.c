@@ -11,6 +11,7 @@
 #include "lcd_driver.h"
 #include "mfrc522.h"
 #include "rfid_config.h"
+#include "uid_hash.h"
 #include "xprintf.h"
 
 #include <stdbool.h>
@@ -271,7 +272,7 @@ static void print_storage_users_table(void)
         return;
     }
 
-    xprintf("idx uid rounds wins draws losses win_pct draw_pct sessions\r\n");
+    xprintf("idx hash16 uid rounds wins draws losses win_pct draw_pct sessions\r\n");
     for (index = 0u; index < count; ++index) {
         const GameUser *user = &users[index];
         uint32_t rounds = user->stats.rounds;
@@ -283,7 +284,7 @@ static void print_storage_users_table(void)
             draw_pct = (uint32_t)(((uint64_t)user->stats.draws * 100u) / rounds);
         }
 
-        xprintf("%u ", (unsigned int)(index + 1u));
+        xprintf("%u 0x%04X ", (unsigned int)(index + 1u), (unsigned int)uid_hash16(&user->id));
         print_user_id(&user->id);
         xprintf(" %lu %lu %lu %lu %lu %lu %lu\r\n",
                 (unsigned long)rounds,

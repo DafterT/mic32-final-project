@@ -3,6 +3,7 @@
 #include "game_storage_backend.h"
 #include "game_storage_format.h"
 #include "model_weights.h"
+#include "uid_hash.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -31,7 +32,6 @@ typedef struct {
 static bool storage_record_is_empty(const GameStorageRecord *record);
 static bool storage_record_is_valid(const GameStorageRecord *record);
 static uint32_t storage_crc32(const void *data, uint32_t length);
-static uint32_t storage_uid_hash(const GameUserId *id);
 
 static bool storage_user_id_is_valid(const GameUserId *id);
 static bool storage_record_header_is_known(const GameStorageRecord *record);
@@ -237,23 +237,6 @@ static uint32_t storage_crc32(const void *data, uint32_t length)
     return crc ^ 0xFFFFFFFFu;
 }
 
-static uint32_t storage_uid_hash(const GameUserId *id)
-{
-    uint32_t hash = 2166136261u;
-    uint8_t index;
-
-    if (!storage_user_id_is_valid(id)) {
-        return 0u;
-    }
-
-    hash = (hash ^ id->length) * 16777619u;
-    for (index = 0u; index < id->length; ++index) {
-        hash = (hash ^ id->bytes[index]) * 16777619u;
-    }
-
-    return hash;
-}
-
 static bool storage_user_id_is_valid(const GameUserId *id)
 {
     return (id != NULL) && (id->length > 0u) && (id->length <= GAME_USER_ID_MAX_BYTES);
@@ -295,7 +278,7 @@ static bool storage_record_matches_uid(const GameStorageRecord *record, const Ga
         return false;
     }
 
-    if (record->uid_hash != storage_uid_hash(id)) {
+    if (record->uid_hash != uid_hash32(id)) {
         return false;
     }
 
@@ -417,7 +400,7 @@ static void storage_user_to_record(const GameUser *user, uint32_t sessions_to_st
     record->magic = GAME_STORAGE_MAGIC;
     record->version = GAME_STORAGE_VERSION;
     record->size = GAME_STORAGE_RECORD_SIZE;
-    record->uid_hash = storage_uid_hash(&user->id);
+    record->uid_hash = uid_hash32(&user->id);
 
     record->uid_len = user->id.length;
     memcpy(record->uid, user->id.bytes, user->id.length);

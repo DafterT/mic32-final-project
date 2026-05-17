@@ -100,11 +100,13 @@
     - +:test/**
   :source:
     - app/game/**
+    - app/math/**
     - app/neural_network/**
     - app/rfid/**
   :include:
     - app
     - app/game
+    - app/math
     - app/neural_network
     - app/rfid
   :libraries: []

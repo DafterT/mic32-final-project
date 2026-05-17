@@ -8,6 +8,7 @@ add_executable(${APP_NAME}
     game/game.c
     game/game_storage.c
     game/game_storage_eeprom.c
+    math/uid_hash.c
     lcd/lcd_driver.c
     neural_network/model_weights.c
     neural_network/quant_model.c
@@ -18,6 +19,7 @@ target_include_directories(${APP_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/buttons
     ${CMAKE_CURRENT_SOURCE_DIR}/game
+    ${CMAKE_CURRENT_SOURCE_DIR}/math
     ${CMAKE_CURRENT_SOURCE_DIR}/lcd
     ${CMAKE_CURRENT_SOURCE_DIR}/neural_network
     ${CMAKE_CURRENT_SOURCE_DIR}/rfid
