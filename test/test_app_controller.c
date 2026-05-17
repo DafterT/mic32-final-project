@@ -247,6 +247,23 @@ void test_app_controller_accepts_card_then_shows_welcome_and_wait_move(void)
     TEST_ASSERT_EQUAL_INT(UI_WAIT_MOVE, last_ui_call()->event);
 }
 
+void test_app_controller_uses_cached_menu_user_without_reloading_storage(void)
+{
+    GameUserId id = make_id(0x22u);
+
+    listed_user_count = 1u;
+    listed_users[0] = make_user(0x22u, 5u, 3u, 1u, 1u);
+    start_and_open_menu();
+
+    app_controller_handle_card(&controller, &id, 120u);
+
+    TEST_ASSERT_EQUAL_UINT8(0u, init_calls);
+    TEST_ASSERT_EQUAL_UINT8(1u, list_calls);
+    TEST_ASSERT_EQUAL_INT(APP_CONTROLLER_STATE_WELCOME, app_controller_state(&controller));
+    TEST_ASSERT_EQUAL_INT(UI_WELCOME, last_ui_call()->event);
+    TEST_ASSERT_EQUAL_UINT32(5u, last_ui_call()->user.stats.rounds);
+}
+
 void test_app_controller_runs_round_animation_and_returns_to_wait_move(void)
 {
     AppControllerState unlocked_from = APP_CONTROLLER_STATE_SPLASH;
@@ -331,7 +348,10 @@ void test_app_controller_same_card_saves_and_returns_to_menu(void)
     TEST_ASSERT_EQUAL_UINT8(1u, save_calls);
     TEST_ASSERT_EQUAL_INT(APP_CONTROLLER_STATE_MENU, app_controller_state(&controller));
     TEST_ASSERT_NULL(app_controller_active_user(&controller));
-    TEST_ASSERT_EQUAL_INT(UI_MENU_EMPTY, last_ui_call()->event);
+    TEST_ASSERT_EQUAL_UINT8(1u, list_calls);
+    TEST_ASSERT_EQUAL_UINT8(1u, app_controller_menu_count(&controller));
+    TEST_ASSERT_EQUAL_INT(UI_MENU_USER, last_ui_call()->event);
+    TEST_ASSERT_EQUAL_UINT8(0x40u, last_ui_call()->user.id.bytes[0]);
     TEST_ASSERT_EQUAL_INT(APP_LOG_RETURNED_MENU_SAME_CARD, last_log_call()->event);
 }
 
@@ -464,7 +484,10 @@ void test_app_controller_different_card_returns_menu_when_new_user_init_is_fatal
     TEST_ASSERT_EQUAL_UINT8(2u, init_calls);
     TEST_ASSERT_EQUAL_INT(APP_CONTROLLER_STATE_MENU, app_controller_state(&controller));
     TEST_ASSERT_NULL(app_controller_active_user(&controller));
-    TEST_ASSERT_EQUAL_INT(UI_MENU_EMPTY, last_ui_call()->event);
+    TEST_ASSERT_EQUAL_UINT8(1u, list_calls);
+    TEST_ASSERT_EQUAL_UINT8(1u, app_controller_menu_count(&controller));
+    TEST_ASSERT_EQUAL_INT(UI_MENU_USER, last_ui_call()->event);
+    TEST_ASSERT_EQUAL_UINT8(0x74u, last_ui_call()->user.id.bytes[0]);
     TEST_ASSERT_EQUAL_INT(APP_LOG_USER_INIT, last_log_call()->event);
     TEST_ASSERT_EQUAL_INT(GAME_STATUS_STORAGE_ERROR, last_log_call()->data.status);
     TEST_ASSERT_EQUAL_UINT8(0u, last_log_call()->user.id.length);

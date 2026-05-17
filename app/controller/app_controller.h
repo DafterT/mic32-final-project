@@ -103,6 +103,7 @@ typedef struct {
     GameUser menu_users[GAME_EEPROM_SLOT_COUNT];
     uint8_t menu_user_count;
     uint8_t menu_index;
+    bool menu_cache_loaded;
     bool user_active;
     AppControllerState state;
     uint32_t state_until_ms;

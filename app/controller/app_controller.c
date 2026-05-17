@@ -21,6 +21,8 @@ static void app_play_sound(const AppController *controller, AppSound sound, uint
 static bool app_activate_user(AppController *controller, const GameUserId *card_id, uint32_t now_ms);
 static bool app_save_active_user(AppController *controller);
 static void app_load_menu_users(AppController *controller);
+static void app_upsert_menu_user(AppController *controller, const GameUser *user);
+static const GameUser *app_find_menu_user(const AppController *controller, const GameUserId *id);
 static void app_sort_menu_users(AppController *controller);
 static bool app_menu_user_before(const GameUser *left, const GameUser *right);
 static void app_show_menu(const AppController *controller);
@@ -101,10 +103,11 @@ void app_controller_handle_card(AppController *controller, const GameUserId *car
 
     log.card_id = card_id;
     log_event(controller, APP_LOG_CARD_ACCEPTED, &log);
-    app_play_sound(controller, APP_SOUND_MENU_BACK, now_ms);
 
     if (!controller->user_active) {
-        (void)app_activate_user(controller, card_id, now_ms);
+        if (app_activate_user(controller, card_id, now_ms)) {
+            app_play_sound(controller, APP_SOUND_MENU_BACK, now_ms);
+        }
         return;
     }
 
@@ -112,6 +115,7 @@ void app_controller_handle_card(AppController *controller, const GameUserId *car
         if (app_save_active_user(controller)) {
             log_event(controller, APP_LOG_RETURNED_MENU_SAME_CARD, NULL);
             app_enter_menu(controller);
+            app_play_sound(controller, APP_SOUND_MENU_BACK, now_ms);
         }
         return;
     }
@@ -119,8 +123,11 @@ void app_controller_handle_card(AppController *controller, const GameUserId *car
     if (!app_save_active_user(controller)) {
         return;
     }
-    if (!app_activate_user(controller, card_id, now_ms)) {
+    if (app_activate_user(controller, card_id, now_ms)) {
+        app_play_sound(controller, APP_SOUND_MENU_BACK, now_ms);
+    } else {
         app_enter_menu(controller);
+        app_play_sound(controller, APP_SOUND_MENU_BACK, now_ms);
     }
 }
 
@@ -339,7 +346,12 @@ static void app_enter_menu(AppController *controller)
     controller->state = APP_CONTROLLER_STATE_MENU;
     controller->user_active = false;
     controller->menu_index = 0u;
-    app_load_menu_users(controller);
+    if (!controller->menu_cache_loaded) {
+        app_load_menu_users(controller);
+    } else {
+        app_sort_menu_users(controller);
+        app_clamp_menu_index(controller);
+    }
     app_show_menu(controller);
 }
 
@@ -542,6 +554,7 @@ static void app_handle_game_button(AppController *controller, GameMove player_mo
 
 static bool app_activate_user(AppController *controller, const GameUserId *card_id, uint32_t now_ms)
 {
+    const GameUser *cached_user;
     GameStatus status;
     AppLogData log = {0};
 
@@ -551,7 +564,13 @@ static bool app_activate_user(AppController *controller, const GameUserId *card_
 
     controller->user_active = false;
     memset(&controller->user, 0, sizeof(controller->user));
-    status = init_user(controller, card_id, &controller->user);
+    cached_user = app_find_menu_user(controller, card_id);
+    if (cached_user != NULL) {
+        controller->user = *cached_user;
+        status = GAME_STATUS_OK;
+    } else {
+        status = init_user(controller, card_id, &controller->user);
+    }
 
     log.status = status;
     log.user = &controller->user;
@@ -580,6 +599,9 @@ static bool app_save_active_user(AppController *controller)
     log.status = status;
     log.user = &controller->user;
     log_event(controller, APP_LOG_SAVE_STATUS, &log);
+    if (!status_is_fatal(status) && controller->user.loaded_from_storage) {
+        app_upsert_menu_user(controller, &controller->user);
+    }
     return !status_is_fatal(status);
 }
 
@@ -603,6 +625,52 @@ static void app_load_menu_users(AppController *controller)
 
     app_sort_menu_users(controller);
     app_clamp_menu_index(controller);
+    controller->menu_cache_loaded = true;
+}
+
+static void app_upsert_menu_user(AppController *controller, const GameUser *user)
+{
+    uint8_t index;
+
+    if ((controller == NULL) || (user == NULL) || !controller->menu_cache_loaded) {
+        return;
+    }
+
+    for (index = 0u; index < controller->menu_user_count; ++index) {
+        if (same_user_id(&controller->menu_users[index].id, &user->id)) {
+            controller->menu_users[index] = *user;
+            app_sort_menu_users(controller);
+            app_clamp_menu_index(controller);
+            return;
+        }
+    }
+
+    if (controller->menu_user_count < GAME_EEPROM_SLOT_COUNT) {
+        controller->menu_users[controller->menu_user_count] = *user;
+        controller->menu_user_count += 1u;
+    } else if (controller->menu_user_count > 0u) {
+        controller->menu_users[controller->menu_user_count - 1u] = *user;
+    }
+
+    app_sort_menu_users(controller);
+    app_clamp_menu_index(controller);
+}
+
+static const GameUser *app_find_menu_user(const AppController *controller, const GameUserId *id)
+{
+    uint8_t index;
+
+    if ((controller == NULL) || (id == NULL) || !controller->menu_cache_loaded) {
+        return NULL;
+    }
+
+    for (index = 0u; index < controller->menu_user_count; ++index) {
+        if (same_user_id(&controller->menu_users[index].id, id)) {
+            return &controller->menu_users[index];
+        }
+    }
+
+    return NULL;
 }
 
 static void app_sort_menu_users(AppController *controller)
