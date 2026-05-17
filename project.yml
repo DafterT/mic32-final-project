@@ -99,12 +99,14 @@
   :test:
     - +:test/**
   :source:
+    - app/controller/**
     - app/game/**
     - app/math/**
     - app/neural_network/**
     - app/rfid/**
   :include:
     - app
+    - app/controller
     - app/game
     - app/math
     - app/neural_network

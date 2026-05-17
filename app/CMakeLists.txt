@@ -4,6 +4,7 @@ set(APP_NAME ${CMAKE_PROJECT_NAME})
 add_executable(${APP_NAME}
     startup.c
     main.c
+    controller/app_controller.c
     buttons/buttons.c
     game/game.c
     game/game_storage.c
@@ -19,6 +20,7 @@ add_executable(${APP_NAME}
 
 target_include_directories(${APP_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/controller
     ${CMAKE_CURRENT_SOURCE_DIR}/buttons
     ${CMAKE_CURRENT_SOURCE_DIR}/game
     ${CMAKE_CURRENT_SOURCE_DIR}/math
