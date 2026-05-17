@@ -14,6 +14,7 @@
 #define GAME_LCD_FORMAT_BUFFER_SIZE 48u
 #define GAME_LCD_PERCENT_MAX 100u
 #define GAME_LCD_MENU_MATCHES_MAX 999u
+#define GAME_LCD_STATS_VALUE_MAX 9999u
 #define GAME_LCD_DUEL_PLAYER_COL 5u
 #define GAME_LCD_DUEL_BOT_COL 9u
 
@@ -308,6 +309,16 @@ static void game_lcd_format_stats(char *buffer, const GameStats *stats)
     game_lcd_append_uint32(buffer, &position, losses);
     if (game_lcd_text_length_up_to(buffer, GAME_LCD_COLS + 1u) <= GAME_LCD_COLS) {
         return;
+    }
+
+    if (wins > GAME_LCD_STATS_VALUE_MAX) {
+        wins = GAME_LCD_STATS_VALUE_MAX;
+    }
+    if (draws > GAME_LCD_STATS_VALUE_MAX) {
+        draws = GAME_LCD_STATS_VALUE_MAX;
+    }
+    if (losses > GAME_LCD_STATS_VALUE_MAX) {
+        losses = GAME_LCD_STATS_VALUE_MAX;
     }
 
     game_lcd_format_start(buffer, &position);
