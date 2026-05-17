@@ -100,7 +100,7 @@ void HAL_DelayMs(uint32_t time_ms)
 
 int main(void)
 {
-    AppController app = {0};
+    static AppController app;
     uint32_t next_rfid_poll_ms = 0u;
 
     SystemClock_Config();

@@ -33,12 +33,12 @@ static void send_raw_data(const char* str)
 	while (*str) lcd_send_data (*str++);
 }
 
-void lcd_send_cmd (char cmd)
+void lcd_send_cmd (uint8_t cmd)
 {
-  char data_u, data_l;
+	uint8_t data_u, data_l;
 	uint8_t data_t[4];
-	data_u = (cmd&0xf0);
-	data_l = ((cmd<<4)&0xf0);
+	data_u = (uint8_t)(cmd & 0xf0u);
+	data_l = (uint8_t)((cmd << 4u) & 0xf0u);
 	data_t[0] = data_u|0x0C;  //en=1, rs=0 -> bxxxx1100
 	data_t[1] = data_u|0x08;  //en=0, rs=0 -> bxxxx1000
 	data_t[2] = data_l|0x0C;  //en=1, rs=0 -> bxxxx1100
@@ -49,12 +49,12 @@ void lcd_send_cmd (char cmd)
 	}
 }
 
-void lcd_send_data (char data)
+void lcd_send_data (uint8_t data)
 {
-	char data_u, data_l;
+	uint8_t data_u, data_l;
 	uint8_t data_t[4];
-	data_u = (data&0xf0);
-	data_l = ((data<<4)&0xf0);
+	data_u = (uint8_t)(data & 0xf0u);
+	data_l = (uint8_t)((data << 4u) & 0xf0u);
 	data_t[0] = data_u|0x0D;  //en=1, rs=0 -> bxxxx1101
 	data_t[1] = data_u|0x09;  //en=0, rs=0 -> bxxxx1001
 	data_t[2] = data_l|0x0D;  //en=1, rs=0 -> bxxxx1101
