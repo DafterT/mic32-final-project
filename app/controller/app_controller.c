@@ -15,7 +15,7 @@ static void app_enter_chant(AppController *controller, uint32_t now_ms);
 static void app_enter_duel(AppController *controller, uint32_t now_ms);
 static void app_enter_result(AppController *controller, uint32_t now_ms);
 static void app_update_state(AppController *controller, uint32_t now_ms);
-static void app_handle_menu_button(AppController *controller, GameMove move);
+static void app_handle_menu_button(AppController *controller, GameMove move, uint32_t now_ms);
 static void app_handle_game_button(AppController *controller, GameMove player_move, uint32_t now_ms);
 static void app_play_sound(const AppController *controller, AppSound sound, uint32_t now_ms);
 static bool app_activate_user(AppController *controller, const GameUserId *card_id, uint32_t now_ms);
@@ -174,7 +174,7 @@ void app_controller_handle_button(AppController *controller, GameMove move, uint
 
     switch (controller->state) {
     case APP_CONTROLLER_STATE_MENU:
-        app_handle_menu_button(controller, move);
+        app_handle_menu_button(controller, move, now_ms);
         break;
     case APP_CONTROLLER_STATE_WAIT_MOVE:
         app_handle_game_button(controller, move, now_ms);
@@ -489,7 +489,7 @@ static void app_update_state(AppController *controller, uint32_t now_ms)
     }
 }
 
-static void app_handle_menu_button(AppController *controller, GameMove move)
+static void app_handle_menu_button(AppController *controller, GameMove move, uint32_t now_ms)
 {
     uint8_t old_index;
     AppLogData log = {0};
@@ -501,6 +501,7 @@ static void app_handle_menu_button(AppController *controller, GameMove move)
     old_index = controller->menu_index;
     log.action = menu_action(move);
     log_event(controller, APP_LOG_BUTTON_ACCEPTED_ACTION, &log);
+    app_play_sound(controller, APP_SOUND_MENU_BUTTON, now_ms);
 
     if (controller->menu_user_count == 0u) {
         return;

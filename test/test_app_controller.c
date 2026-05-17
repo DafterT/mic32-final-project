@@ -198,6 +198,7 @@ void test_app_controller_sorts_menu_and_navigates_with_buttons(void)
     listed_users[3] = make_user(4u, 4u, 2u, 1u, 1u);
 
     start_and_open_menu();
+    sound_call_count = 0u;
 
     TEST_ASSERT_EQUAL_UINT8(4u, app_controller_menu_count(&controller));
     TEST_ASSERT_EQUAL_UINT8(4u, app_controller_menu_user(&controller, 0u)->id.bytes[0]);
@@ -208,6 +209,9 @@ void test_app_controller_sorts_menu_and_navigates_with_buttons(void)
     app_controller_handle_button(&controller, GAME_MOVE_SCISSORS, 11u);
     TEST_ASSERT_EQUAL_UINT8(1u, app_controller_menu_index(&controller));
     TEST_ASSERT_EQUAL_UINT8(2u, last_ui_call()->user.id.bytes[0]);
+    TEST_ASSERT_EQUAL_UINT8(1u, sound_call_count);
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_MENU_BUTTON, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(11u, last_sound_call()->now_ms);
 
     app_controller_handle_button(&controller, GAME_MOVE_ROCK, 12u);
     TEST_ASSERT_EQUAL_UINT8(0u, app_controller_menu_index(&controller));
@@ -567,6 +571,7 @@ void test_app_controller_empty_menu_accepts_button_without_ui_refresh(void)
     uint8_t previous_ui_calls;
 
     start_and_open_menu();
+    sound_call_count = 0u;
     previous_ui_calls = ui_call_count;
 
     app_controller_handle_button(&controller, GAME_MOVE_SCISSORS, 290u);
@@ -574,6 +579,9 @@ void test_app_controller_empty_menu_accepts_button_without_ui_refresh(void)
     TEST_ASSERT_EQUAL_UINT8(0u, app_controller_menu_count(&controller));
     TEST_ASSERT_EQUAL_UINT8(0u, app_controller_menu_index(&controller));
     TEST_ASSERT_EQUAL_UINT8(previous_ui_calls, ui_call_count);
+    TEST_ASSERT_EQUAL_UINT8(1u, sound_call_count);
+    TEST_ASSERT_EQUAL_INT(APP_SOUND_MENU_BUTTON, last_sound_call()->sound);
+    TEST_ASSERT_EQUAL_UINT32(290u, last_sound_call()->now_ms);
     TEST_ASSERT_EQUAL_INT(APP_LOG_BUTTON_ACCEPTED_ACTION, last_log_call()->event);
     TEST_ASSERT_EQUAL_INT(APP_MENU_ACTION_DOWN, last_log_call()->data.action);
 }

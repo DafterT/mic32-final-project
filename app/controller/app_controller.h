@@ -27,6 +27,7 @@ typedef enum {
 typedef enum {
     APP_SOUND_INTRO = 0u,
     APP_SOUND_MENU_BACK,
+    APP_SOUND_MENU_BUTTON,
     APP_SOUND_CHANT,
     APP_SOUND_LOSE,
     APP_SOUND_DRAW,

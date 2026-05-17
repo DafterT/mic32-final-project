@@ -85,6 +85,10 @@ static const BuzzerNote menu_back_melody[] = {
     MELODY_NOTE(NOTE_C5, 4),
 };
 
+static const BuzzerNote menu_button_melody[] = {
+    MELODY_NOTE(NOTE_C6, 16),
+};
+
 static const BuzzerNote chant_melody[] = {
     MELODY_NOTE(NOTE_C5, 16),
     MELODY_NOTE(NOTE_D5, 16),
@@ -147,6 +151,7 @@ static const BuzzerNote win_melody[] = {
 
 static const BuzzerMelody intro = {intro_melody, sizeof(intro_melody) / sizeof(intro_melody[0])};
 static const BuzzerMelody menu_back = {menu_back_melody, sizeof(menu_back_melody) / sizeof(menu_back_melody[0])};
+static const BuzzerMelody menu_button = {menu_button_melody, sizeof(menu_button_melody) / sizeof(menu_button_melody[0])};
 static const BuzzerMelody chant = {chant_melody, sizeof(chant_melody) / sizeof(chant_melody[0])};
 static const BuzzerMelody lose = {lose_melody, sizeof(lose_melody) / sizeof(lose_melody[0])};
 static const BuzzerMelody draw = {draw_melody, sizeof(draw_melody) / sizeof(draw_melody[0])};
@@ -284,6 +289,8 @@ static const BuzzerMelody *buzzer_melody(AppSound sound)
         return &intro;
     case APP_SOUND_MENU_BACK:
         return &menu_back;
+    case APP_SOUND_MENU_BUTTON:
+        return &menu_button;
     case APP_SOUND_CHANT:
         return &chant;
     case APP_SOUND_LOSE:
