@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+data/*.csv
+artifacts/comparison.*
+artifacts/confusion_float.png
+artifacts/dataset_summary.json
+artifacts/metrics_*
+artifacts/model_float.pth
+artifacts/sweep/work/
